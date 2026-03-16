@@ -35,7 +35,7 @@ jobs:
         env:
           NODE_ENV: production
           # Nom du repo GitHub (doit correspondre exactement)
-          REPO_NAME: accuracy-profile-addin
+          REPO_NAME: accuracy
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
