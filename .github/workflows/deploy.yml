@@ -34,7 +34,6 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
-          # Nom du repo GitHub (doit correspondre exactement)
           REPO_NAME: accuracy
 
       - name: Upload artifact

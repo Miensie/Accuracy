@@ -1,13 +1,11 @@
-const HtmlWebpackPlugin = require("html-webpack-plugin");
-const CopyWebpackPlugin = require("copy-webpack-plugin");
-const path              = require("path");
+const HtmlWebpackPlugin    = require("html-webpack-plugin");
+const CopyWebpackPlugin    = require("copy-webpack-plugin");
+const MiniCssExtractPlugin = require("mini-css-extract-plugin");
+const path                 = require("path");
 
-// Nom du repo GitHub — à adapter si différent
-const REPO_NAME = process.env.REPO_NAME || "accuracy-profile-addin";
-// En prod (GitHub Pages) : publicPath = /nom-du-repo/
-// En dev (localhost)     : publicPath = /
-const isProd      = process.env.NODE_ENV === "production";
-const publicPath  = isProd ? `/${REPO_NAME}/` : "/";
+const isProd     = process.env.NODE_ENV === "production";
+const REPO_NAME  = process.env.REPO_NAME || "";
+const publicPath = isProd && REPO_NAME ? `/${REPO_NAME}/` : "/";
 
 module.exports = {
   entry: {
@@ -24,20 +22,31 @@ module.exports = {
   module: {
     rules: [
       { test: /\.js$/,  use: "babel-loader", exclude: /node_modules/ },
-      { test: /\.css$/, use: ["style-loader", "css-loader"] },
+      {
+        test: /\.css$/,
+        use: [
+          isProd ? MiniCssExtractPlugin.loader : "style-loader",
+          "css-loader",
+        ],
+      },
       { test: /\.(png|svg|ico)$/, type: "asset/resource" },
     ],
   },
   plugins: [
+    ...(isProd ? [new MiniCssExtractPlugin({ filename: "[name].css" })] : []),
+
     new HtmlWebpackPlugin({
       filename: "taskpane.html",
       template: "./src/taskpane/taskpane.html",
       chunks:   ["taskpane"],
+      // Injecte automatiquement le <link rel="stylesheet" href="taskpane.css">
+      inject:   true,
     }),
     new HtmlWebpackPlugin({
       filename: "commands.html",
       template: "./src/taskpane/commands.html",
       chunks:   ["commands"],
+      inject:   true,
     }),
     new CopyWebpackPlugin({
       patterns: [

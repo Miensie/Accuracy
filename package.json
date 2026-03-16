@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Add-in Excel — Profil d'Exactitude — Validation analytique ISO 5725-2",
   "scripts": {
-    "start":       "office-addin-dev-certs install --machine && webpack serve --mode development",
-    "build":       "cross-env NODE_ENV=production REPO_NAME=accuracy-profile-addin webpack --mode production",
-    "build:dev":   "webpack --mode development",
-    "validate":    "office-addin-manifest validate manifest.xml"
+    "start":     "office-addin-dev-certs install --machine && webpack serve --mode development",
+    "build":     "cross-env NODE_ENV=production REPO_NAME=accuracy webpack --mode production",
+    "build:dev": "webpack --mode development",
+    "validate":  "office-addin-manifest validate manifest.xml"
   },
   "dependencies": {
     "@microsoft/office-js": "^1.1.0",
@@ -20,6 +20,7 @@
     "cross-env": "^7.0.3",
     "css-loader": "^6.8.0",
     "html-webpack-plugin": "^5.5.0",
+    "mini-css-extract-plugin": "^2.7.6",
     "office-addin-debugging": "^1.1.0",
     "office-addin-dev-certs": "^1.2.0",
     "office-addin-manifest": "^1.9.0",
