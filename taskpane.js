@@ -7,7 +7,7 @@ import "./taskpane.css";
 
 
 // ─── Configuration Backend ────────────────────────────────────────────────────
-const BACKEND_URL = 'http://localhost:8000'; // Adjust if backend is on different port/host
+const BACKEND_URL = 'https://accuracy.onrender.com'; // Adjust if backend is on different port/host
 
 // ─── Vérification Backend ─────────────────────────────────────────────────────
 async function checkBackendHealth() {
