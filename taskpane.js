@@ -4,14 +4,10 @@
  * ================================================================
  */
 import "./taskpane.css";
-import "../modules/statistics.js";
-import "../modules/excelBridge.js";
-import "../modules/geminiAI.js";
-import "../modules/demoData.js";
-import "../modules/reportGenerator.js";
+
 
 // ─── État global ──────────────────────────────────────────────────────────────
-const DEFAULT_API_BASE = "http://localhost:8000";
+const DEFAULT_API_BASE = "https://accuracy.onrender.com";
 
 const APP = {
   planValidation:  null,
