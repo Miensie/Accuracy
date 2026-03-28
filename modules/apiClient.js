@@ -83,7 +83,7 @@ const ApiClient = (() => {
    * BUG FIX : méthode renommée "health" (était "healthCheck" dans taskpane.js)
    */
   async function health() {
-    return _fetch("/api/health");
+    return _fetch(`${_baseUrl}/health`);
   }
 
 
