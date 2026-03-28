@@ -13,22 +13,45 @@ const ExcelBridge = (() => {
   async function detectUsedRange() {
     return Excel.run(async ctx => {
       const sheet = ctx.workbook.worksheets.getActiveWorksheet();
+      sheet.load("name");
       const range = sheet.getUsedRange();
       range.load("address");
       await ctx.sync();
-      return range.address.split("!").pop();
+      // Retourner l'adresse qualifiée complète, ex: "Plan_Validation!A1:F28"
+      return range.address;   // Excel renvoie déjà "SheetName!A1:Zn"
     });
   }
 
   /**
+   * Résout le worksheet et la plage locale depuis une adresse qui peut être :
+   *   - qualifiée  : "Plan_Validation!A1:F28"  ou  "Plan_Validation!A:F"
+   *   - simple     : "A1:F28"   → feuille active
+   * Retourne { sheet, localRange }
+   */
+  function _resolveSheetAndRange(ctx, address) {
+    const bang = address.indexOf("!");
+    if (bang !== -1) {
+      // Supprimer les guillemets simples éventuels autour du nom de feuille
+      const sheetPart = address.slice(0, bang).replace(/^'|'$/g, "");
+      const rangePart = address.slice(bang + 1);
+      const sheet = ctx.workbook.worksheets.getItem(sheetPart);
+      return { sheet, localRange: rangePart };
+    }
+    return {
+      sheet:      ctx.workbook.worksheets.getActiveWorksheet(),
+      localRange: address,
+    };
+  }
+
+  /**
    * Lit le plan de validation depuis Excel.
+   * Supporte les adresses qualifiées : "Plan_Validation!A1:F28"
    * Format colonnes : Niveau | Série | Rép. | X réf. | Y réponse
-   * Retourne le format attendu par le backend : { niveau, serie, rep, xRef, yResponse }
    */
   async function readPlanValidation(rangeAddress) {
     return Excel.run(async ctx => {
-      const sheet = ctx.workbook.worksheets.getActiveWorksheet();
-      const range = sheet.getRange(rangeAddress);
+      const { sheet, localRange } = _resolveSheetAndRange(ctx, rangeAddress.trim());
+      const range = sheet.getRange(localRange);
       range.load("values");
       await ctx.sync();
 
@@ -36,43 +59,52 @@ const ExcelBridge = (() => {
       if (!values || values.length < 2)
         throw new Error("Plan de validation vide ou incomplet (minimum 2 lignes)");
 
+      // Détecter l'en-tête : la première cellule n'est pas un nombre
       const hasHeader = isNaN(parseFloat(String(values[0][0]).trim()));
       const dataRows  = hasHeader ? values.slice(1) : values;
 
       const plan = dataRows
-        .filter(row => row.some(v => v !== "" && v !== null))
+        .filter(row => row.some(v => v !== "" && v !== null && v !== undefined))
         .map(row => ({
-          niveau:    String(row[0] ?? "").trim() || String(row[0]),
-          serie:     String(row[1] ?? "").trim() || String(row[1]),
+          niveau:    String(row[0] ?? "").trim(),
+          serie:     String(row[1] ?? "").trim(),
           rep:       parseInt(row[2]) || 1,
           xRef:      parseFloat(row[3]),
           yResponse: parseFloat(row[4]),
         }))
-        .filter(r => !isNaN(r.xRef) && !isNaN(r.yResponse) && r.xRef > 0);
+        .filter(r => !isNaN(r.xRef) && !isNaN(r.yResponse)
+                  && r.xRef > 0 && r.niveau !== "" && r.serie !== "");
 
-      if (!plan.length) throw new Error("Aucune ligne valide dans le plan de validation");
+      if (!plan.length)
+        throw new Error(
+          "Aucune ligne valide dans le plan de validation.\n" +
+          "Vérifiez que les colonnes D (X réf.) et E (Y réponse) contiennent des nombres."
+        );
       return plan;
     });
   }
 
   /**
    * Lit le plan d'étalonnage depuis Excel.
+   * Supporte les adresses qualifiées : "Plan_Etalonnage!A1:E13"
    * Format colonnes : Niveau | Série | Rép. | X étalon | Y réponse
-   * Retourne : { serie, niveau, rep, xEtalon, yResponse }
    */
   async function readPlanEtalonnage(rangeAddress) {
     return Excel.run(async ctx => {
-      const sheet = ctx.workbook.worksheets.getActiveWorksheet();
-      const range = sheet.getRange(rangeAddress);
+      const { sheet, localRange } = _resolveSheetAndRange(ctx, rangeAddress.trim());
+      const range = sheet.getRange(localRange);
       range.load("values");
       await ctx.sync();
 
-      const values   = range.values;
+      const values    = range.values;
+      if (!values || values.length < 2)
+        throw new Error("Plan d'étalonnage vide");
+
       const hasHeader = isNaN(parseFloat(String(values[0][0]).trim()));
       const dataRows  = hasHeader ? values.slice(1) : values;
 
       const plan = dataRows
-        .filter(row => row.some(v => v !== "" && v !== null))
+        .filter(row => row.some(v => v !== "" && v !== null && v !== undefined))
         .map(row => ({
           niveau:    String(row[0] ?? "").trim(),
           serie:     String(row[1] ?? "").trim(),
@@ -80,9 +112,14 @@ const ExcelBridge = (() => {
           xEtalon:   parseFloat(row[3]),
           yResponse: parseFloat(row[4]),
         }))
-        .filter(r => !isNaN(r.xEtalon) && !isNaN(r.yResponse) && r.xEtalon > 0);
+        .filter(r => !isNaN(r.xEtalon) && !isNaN(r.yResponse)
+                  && r.xEtalon > 0 && r.niveau !== "" && r.serie !== "");
 
-      if (!plan.length) throw new Error("Aucune ligne valide dans le plan d'étalonnage");
+      if (!plan.length)
+        throw new Error(
+          "Aucune ligne valide dans le plan d'étalonnage.\n" +
+          "Vérifiez que les colonnes D (X étalon) et E (Y réponse) contiennent des nombres."
+        );
       return plan;
     });
   }
@@ -140,7 +177,13 @@ const ExcelBridge = (() => {
 
       sheet.activate();
       await ctx.sync();
-      return { sheetName, rows: rows.length - 1 };
+      // dataEndRow = rows.length (header + data), dernière ligne de données
+      const dataEndRow = rows.length;
+      return {
+        sheetName,
+        rows:          rows.length - 1,
+        qualifiedRange: `${sheetName}!A1:F${dataEndRow}`,  // plage qualifiée pour auto-fill
+      };
     });
   }
 
@@ -176,7 +219,11 @@ const ExcelBridge = (() => {
 
       sheet.activate();
       await ctx.sync();
-      return { sheetName, rows: rows.length - 1 };
+      return {
+        sheetName,
+        rows:          rows.length - 1,
+        qualifiedRange: `${sheetName}!A1:E${rows.length}`,
+      };
     });
   }
 

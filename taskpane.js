@@ -74,19 +74,19 @@ function _setupNavigation() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function _checkBackendConnection() {
-  _showBanner("Connexion au backend en cours…", null);
+  _showBanner("Connexion en cours…", null);
   try {
     // FIX : méthode correcte est health(), pas healthCheck()
     await ApiClient.health();
     APP.backendOnline = true;
-    _showBanner("✓ Backend connecté — " + ApiClient.getBaseUrl(), true);
+    _showBanner("✓ Connecté", true);
     setStatus("Backend ✓");
-    log("Backend connecté : " + ApiClient.getBaseUrl(), "ok");
+    log("Connecté", "ok");
   } catch (e) {
     APP.backendOnline = false;
     _showBanner("⚠ Backend inaccessible — vérifiez la connexion", false);
     setStatus("⚠ Backend hors ligne");
-    log("Backend inaccessible : " + e.message, "warn");
+    log("Backend inaccessible : " + _errMsg(e), "warn");
   }
 }
 
@@ -120,7 +120,7 @@ function _setupDataHandlers() {
       const r = await ExcelBridge.detectUsedRange();
       document.getElementById("range-validation").value = r;
       toast("Plage détectée : " + r, "info");
-    } catch (e) { toast("Erreur : " + e.message, "err"); }
+    } catch (e) { toast("Erreur : " + _errMsg(e), "err"); }
   });
 
   document.getElementById("btn-detect-etalonnage").addEventListener("click", async () => {
@@ -128,7 +128,7 @@ function _setupDataHandlers() {
       const r = await ExcelBridge.detectUsedRange();
       document.getElementById("range-etalonnage").value = r;
       toast("Plage détectée : " + r, "info");
-    } catch (e) { toast("Erreur : " + e.message, "err"); }
+    } catch (e) { toast("Erreur : " + _errMsg(e), "err"); }
   });
 
   // Génération du plan
@@ -140,16 +140,26 @@ function _setupDataHandlers() {
     const methodType = document.getElementById("cfg-type").value;
     setBtnLoading("btn-generate-plan", true, "Génération…");
     try {
-      const { sheetName, rows } = await ExcelBridge.generatePlanValidation(K, I, J, u, methodType);
-      toast(`✅ Plan généré : ${rows} lignes → onglet "${sheetName}"`, "info");
-      log(`Plan ${methodType} : K=${K}, I=${I}, J=${J} → ${rows} lignes`, "ok");
+      const resV = await ExcelBridge.generatePlanValidation(K, I, J, u, methodType);
+      // Auto-remplir la plage validation avec l'adresse qualifiée (ex: "Plan_Validation!A1:F28")
+      // Si generatePlanValidation retourne qualifiedRange, on l'utilise, sinon adresse simple
+      const rangeV = resV.qualifiedRange || `Plan_Validation!A1:F${resV.rows + 1}`;
+      document.getElementById("range-validation").value = rangeV;
+      toast(`✅ Plan généré : ${resV.rows} lignes → onglet "${resV.sheetName}"`, "info");
+      log(`Plan ${methodType} : K=${K}, I=${I}, J=${J} → ${resV.rows} lignes | plage : ${rangeV}`, "ok");
+
       if (methodType === "indirect") {
-        await ExcelBridge.generatePlanEtalonnage(I, 2, 2, u);
-        log("Plan d'étalonnage créé (2 niveaux, 2 répétitions)", "ok");
+        const resE = await ExcelBridge.generatePlanEtalonnage(I, 2, 2, u);
+        // Auto-remplir la plage étalonnage
+        const rangeE = resE.qualifiedRange || `Plan_Etalonnage!A1:E${resE.rows + 1}`;
+        document.getElementById("range-etalonnage").value = rangeE;
+        log(`Plan étalonnage créé → ${resE.rows} lignes | plage : ${rangeE}`, "ok");
       }
+
+      toast("💡 Plages pré-remplies. Saisissez vos données puis cliquez « Importer ».", "info", 5000);
     } catch (e) {
-      toast("Erreur : " + e.message, "err");
-      log("Erreur génération plan : " + e.message, "err");
+      toast("Erreur : " + _errMsg(e), "err");
+      log("Erreur génération plan : " + _errMsg(e), "err");
     } finally {
       setBtnLoading("btn-generate-plan", false, "⊞ Générer le plan");
     }
@@ -170,8 +180,8 @@ function _setupDataHandlers() {
       toast("✅ Feuilles de saisie créées", "info");
       log("Templates : " + [res.sheetP, res.sheetV, res.sheetE].filter(Boolean).join(", "), "ok");
     } catch (e) {
-      toast("Erreur : " + e.message, "err");
-      log("Erreur templates : " + e.message, "err");
+      toast("Erreur : " + _errMsg(e), "err");
+      log("Erreur templates : " + _errMsg(e), "err");
     } finally {
       setBtnLoading("btn-generate-templates", false, "▦ Feuilles de saisie");
     }
@@ -193,21 +203,32 @@ async function _handleImportAndCalc() {
 
   if (!rangeVal) { toast("Saisissez la plage du plan de validation", "warn"); return; }
 
+  // Pour une méthode indirecte la plage d'étalonnage est obligatoire
+  if (methodType === "indirect" && !rangeEta) {
+    toast("Méthode indirecte : saisissez aussi la plage du plan d'étalonnage", "warn");
+    return;
+  }
+
   setBtnLoading("btn-import", true, "Import et calcul en cours…");
   try {
+    log(`Lecture plan de validation : ${rangeVal}`, "info");
     APP.planValidation = await ExcelBridge.readPlanValidation(rangeVal);
+    log(`✓ ${APP.planValidation.length} lignes lues dans Plan_Validation`, "ok");
+
     APP.planEtalonnage = [];
-    if (methodType === "indirect" && rangeEta) {
+    if (methodType === "indirect") {
+      log(`Lecture plan d'étalonnage : ${rangeEta}`, "info");
       APP.planEtalonnage = await ExcelBridge.readPlanEtalonnage(rangeEta);
+      log(`✓ ${APP.planEtalonnage.length} lignes lues dans Plan_Etalonnage`, "ok");
     }
+
     _readConfigFromUI();
     await _runAnalysis();
     _renderPreview();
     toast(`✅ ${APP.planValidation.length} mesures importées et analysées`, "ok");
-    log(`${APP.planValidation.length} mesures importées depuis Excel`, "ok");
   } catch (e) {
-    toast("Erreur : " + e.message, "err");
-    log("Erreur import : " + e.message, "err");
+    toast("Erreur import : " + _errMsg(e), "err");
+    log("❌ Erreur import : " + _errMsg(e), "err");
   } finally {
     // FIX : finally garantit que le bouton est toujours réactivé
     setBtnLoading("btn-import", false, "⊞ Importer et calculer");
@@ -235,8 +256,8 @@ function _handleDemo(type) {
 
   _readConfigFromUI();
   _runAnalysis().catch(e => {
-    toast("Erreur analyse : " + e.message, "err");
-    log("Erreur : " + e.message, "err");
+    toast("Erreur analyse : " + _errMsg(e), "err");
+    log("Erreur : " + _errMsg(e), "err");
   });
   _renderPreview();
   toast(`✅ Données de démonstration (${type}) chargées`, "info");
@@ -325,8 +346,8 @@ async function _runAnalysis() {
     _renderProfileChart();
 
   } catch (e) {
-    toast("Erreur backend : " + e.message, "err");
-    log("Erreur analyse : " + e.message, "err");
+    toast("Erreur backend : " + _errMsg(e), "err");
+    log("Erreur analyse : " + _errMsg(e), "err");
     setStatus("⚠ Erreur backend");
     throw e;
   }
@@ -345,7 +366,7 @@ function _setupCalcHandlers() {
       const sheet = await ExcelBridge.writeAnalysisResults(APP.results, APP.config);
       toast(`✅ Résultats écrits → onglet "${sheet}"`, "ok");
     } catch (e) {
-      toast("Erreur : " + e.message, "err");
+      toast("Erreur : " + _errMsg(e), "err");
     } finally {
       setBtnLoading("btn-write-results", false, "📊 Écrire les résultats dans Excel");
     }
@@ -500,7 +521,7 @@ function _setupProfileHandlers() {
       );
       toast(`✅ Graphique inséré → onglet "${sheet}"`, "ok");
     } catch (e) {
-      toast("Erreur : " + e.message, "err");
+      toast("Erreur : " + _errMsg(e), "err");
     } finally {
       setBtnLoading("btn-insert-chart", false, "📊 Insérer le graphique dans Excel");
     }
@@ -689,8 +710,8 @@ function _setupAIHandlers() {
       );
       toast("✅ Interprétation terminée", "info");
     } catch (e) {
-      _showAIResult(`<span style="color:var(--invalid)">❌ ${e.message}</span>`, "ERREUR");
-      toast(e.message, "err");
+      _showAIResult(`<span style="color:var(--invalid)">❌ ${_errMsg(e)}</span>`, "ERREUR");
+      toast(_errMsg(e), "err");
     } finally {
       setBtnLoading("btn-ai-rules", false, "⚙ Interprétation par règles (sans clé API)");
     }
@@ -717,8 +738,8 @@ function _setupAIHandlers() {
         _showAIResult(_formatAIText(text), `LLM — ${useLLM ? "LLM activé" : "Règles"}`);
         toast("✅ Analyse IA terminée", "info");
       } catch (e) {
-        _showAIResult(`<span style="color:var(--invalid)">❌ ${e.message}</span>`, "ERREUR");
-        toast(e.message, "err");
+        _showAIResult(`<span style="color:var(--invalid)">❌ ${_errMsg(e)}</span>`, "ERREUR");
+        toast(_errMsg(e), "err");
       } finally {
         setBtnLoading(btnId, false, label);
       }
@@ -768,7 +789,7 @@ async function _handleChat() {
     if (bubble) bubble.innerHTML = _formatAIText(text);
   } catch (e) {
     const bubble = document.getElementById(typingId);
-    if (bubble) bubble.innerHTML = `<span style="color:var(--invalid)">❌ ${e.message}</span>`;
+    if (bubble) bubble.innerHTML = `<span style="color:var(--invalid)">❌ ${_errMsg(e)}</span>`;
   }
 }
 
@@ -834,8 +855,8 @@ function _setupReportHandlers() {
       toast("✅ Rapport HTML téléchargé", "ok");
       logReport("Rapport HTML généré", "ok");
     } catch (e) {
-      toast("Erreur : " + e.message, "err");
-      logReport("Erreur HTML : " + e.message, "err");
+      toast("Erreur : " + _errMsg(e), "err");
+      logReport("Erreur HTML : " + _errMsg(e), "err");
     }
   });
 
@@ -850,8 +871,8 @@ function _setupReportHandlers() {
       toast("✅ Rapport PDF téléchargé", "ok");
       logReport("Rapport PDF généré via backend", "ok");
     } catch (e) {
-      toast("Erreur PDF : " + e.message, "err");
-      logReport("Erreur PDF : " + e.message, "err");
+      toast("Erreur PDF : " + _errMsg(e), "err");
+      logReport("Erreur PDF : " + _errMsg(e), "err");
     } finally {
       setBtnLoading("btn-report-pdf", false, "📄 Télécharger le rapport PDF (via backend)");
     }
@@ -907,4 +928,34 @@ function setBtnLoading(id, loading, label) {
 function setStatus(msg) {
   const el = document.getElementById("footer-status");
   if (el) el.textContent = msg;
+}
+
+/**
+ * Extrait un message lisible depuis n'importe quel type d'erreur.
+ * Résout le problème "Erreur : [object Object],[object Object]"
+ * qui survient quand FastAPI renvoie un tableau d'erreurs Pydantic.
+ *
+ *   e instanceof Error  → e.message
+ *   Array Pydantic      → "[champ] message | [champ2] message2"
+ *   Objet quelconque    → JSON.stringify
+ */
+function _errMsg(e) {
+  if (!e) return "Erreur inconnue";
+  if (typeof e === "string") return e;
+  if (e instanceof Error)   return e.message || String(e);
+  if (Array.isArray(e)) {
+    return e.map(item => {
+      if (item && typeof item === "object") {
+        const loc = Array.isArray(item.loc)
+          ? item.loc.filter(p => typeof p !== "number").slice(1).join("→")
+          : "";
+        return loc ? `[${loc}] ${item.msg}` : (item.msg || JSON.stringify(item));
+      }
+      return String(item);
+    }).join(" | ");
+  }
+  if (typeof e === "object") {
+    return e.message || e.detail || e.msg || JSON.stringify(e);
+  }
+  return String(e);
 }

@@ -50,7 +50,21 @@ const ApiClient = (() => {
         let detail = `HTTP ${resp.status}`;
         try {
           const err = await resp.json();
-          detail = err.detail || err.message || detail;
+          // FastAPI renvoie les erreurs Pydantic sous forme de tableau
+          // ex : [{ loc: ["body","planValidation",0,"xRef"], msg: "...", type: "..." }]
+          // Sans ce traitement → "Erreur : [object Object],[object Object]"
+          if (Array.isArray(err.detail)) {
+            detail = err.detail
+              .map(e => {
+                const loc = Array.isArray(e.loc)
+                  ? e.loc.filter(p => typeof p !== "number").slice(1).join(" → ")
+                  : "";
+                return loc ? `[${loc}] ${e.msg}` : (e.msg || JSON.stringify(e));
+              })
+              .join(" | ");
+          } else {
+            detail = err.detail || err.message || JSON.stringify(err) || detail;
+          }
         } catch { /* ignore */ }
         throw new Error(detail);
       }
