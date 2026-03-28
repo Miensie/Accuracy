@@ -309,9 +309,9 @@ def compute_criteria(found: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     for s, zm in zip(series, serie_means))
 
         ddr   = sum(len(s) - 1 for s in series)
-        ddb   = I - 1
+        ddb   = I * (J - 1)
         sr2   = sce_r / ddr if ddr > 0 else 0.0
-        sb2   = max(0.0, sce_b / ddb - sr2 / J) if ddb > 0 else 0.0
+        sb2   = max(0.0, (sce_b /(I-1) - sr2) / J) if ddb > 0 else 0.0
         sfi2  = sr2 + sb2
 
         sr   = float(np.sqrt(sr2))
