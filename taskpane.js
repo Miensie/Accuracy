@@ -74,7 +74,7 @@ function _setupNavigation() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function _checkBackendConnection() {
-  _showBanner("Connexion en cours…", null);
+  _showBanner("Connexion au backend en cours…", null);
   try {
     // FIX : méthode correcte est health(), pas healthCheck()
     await ApiClient.health();
@@ -278,13 +278,21 @@ function _applyDemoConfig(cfg) {
 }
 
 function _readConfigFromUI() {
+  const rawModel    = document.getElementById("cfg-model")?.value     || "linear";
+  const rawFramework= document.getElementById("cfg-framework")?.value || "iso5725";
+
+  // "auto" n'est pas accepté par le backend Pydantic → mapper vers "linear"
+  // Le backend gère lui-même la sélection AIC quand modelType="linear"
+  const VALID_MODELS     = ["linear", "origin", "quad"];
+  const VALID_FRAMEWORKS = ["iso5725", "ichq2", "nf_v03", "sfstp"];
+
   APP.config = {
     methode:    document.getElementById("cfg-methode").value   || "Méthode analytique",
     materiau:   document.getElementById("cfg-materiau").value  || "—",
     unite:      document.getElementById("cfg-unite").value     || "",
     methodType: document.getElementById("cfg-type").value      || "indirect",
-    modelType:  document.getElementById("cfg-model").value     || "linear",
-    framework:  document.getElementById("cfg-framework").value || "iso5725",
+    modelType:  VALID_MODELS.includes(rawModel)      ? rawModel      : "linear",
+    framework:  VALID_FRAMEWORKS.includes(rawFramework) ? rawFramework : "iso5725",
     lambda:     parseFloat(document.getElementById("cfg-lambda").value) / 100 || 0.10,
     beta:       parseFloat(document.getElementById("cfg-beta").value)   / 100 || 0.80,
     alpha:      0.05,
