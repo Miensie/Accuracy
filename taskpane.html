@@ -18,7 +18,7 @@
     <div class="brand-mark">⬟</div>
     <div>
       <div class="brand-name">ACCURACY <span class="brand-accent">PROFILE</span></div>
-      <div class="brand-sub">Validation analytique · ISO 5725-2 · Feinberg</div>
+      <div class="brand-sub">Validation analytique · ISO 5725-2 · Feinberg · Backend v2</div>
     </div>
   </div>
   <div id="footer-status" class="header-status">Initialisation…</div>
@@ -44,13 +44,26 @@
 
 <main class="main-content">
 
-  <!-- PANEL: DONNÉES -->
+  <!-- ═══════════════════════════════════════════════════════
+       PANEL : DONNÉES
+  ═══════════════════════════════════════════════════════ -->
   <section id="panel-data" class="panel active">
     <div class="panel-header">
       <h2>Paramètres et données</h2>
       <p class="panel-sub">Configuration du plan de validation selon ISO 5725-2 / Feinberg (2010).</p>
     </div>
 
+    <!-- Backend URL -->
+    <div class="card">
+      <div class="card-label">CONNEXION BACKEND PYTHON</div>
+      <div class="input-row" style="margin-bottom:4px">
+        <input type="text" id="backend-url" placeholder="http://localhost:8000" value="http://localhost:8000"/>
+        <button class="btn-icon" id="btn-ping-backend" title="Tester la connexion">⟳</button>
+      </div>
+      <div id="backend-status" class="api-note">Statut : non testé</div>
+    </div>
+
+    <!-- Paramètres de validation -->
     <div class="card">
       <div class="card-label">PARAMÈTRES DE VALIDATION</div>
       <div class="form-grid">
@@ -74,16 +87,35 @@
           </select>
         </div>
         <div class="form-field">
-          <label>Limite d'acceptabilité &lambda; (%)</label>
+          <label>Modèle étalonnage</label>
+          <select id="cfg-model" class="select-field">
+            <option value="linear">Linéaire (y = a₀ + a₁x)</option>
+            <option value="origin">Par l'origine (y = a₁x)</option>
+            <option value="quad">Quadratique</option>
+            <option value="auto">Auto (sélection AIC)</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Framework normatif</label>
+          <select id="cfg-framework" class="select-field">
+            <option value="iso5725">ISO 5725-2</option>
+            <option value="ichq2">ICH Q2(R1)</option>
+            <option value="sfstp">SFSTP / Feinberg</option>
+            <option value="all">Tous les référentiels</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Limite d'acceptabilité λ (%)</label>
           <input type="number" id="cfg-lambda" value="10" min="1" max="50" step="0.5"/>
         </div>
         <div class="form-field">
-          <label>Proportion &beta; (%)</label>
+          <label>Proportion β (%)</label>
           <input type="number" id="cfg-beta" value="80" min="50" max="99" step="1"/>
         </div>
       </div>
     </div>
 
+    <!-- Plan expérimental -->
     <div class="card">
       <div class="card-label">PLAN EXPÉRIMENTAL</div>
       <div class="form-grid-3">
@@ -100,14 +132,11 @@
           <input type="number" id="cfg-J" value="3" min="2" max="10"/>
         </div>
       </div>
-      <button class="btn btn-secondary" id="btn-generate-plan">
-        ⊞ Générer le plan dans Excel
-      </button>
-      <button class="btn btn-ghost" id="btn-generate-templates" style="margin-top:6px">
-        ▦ Générer les feuilles de saisie (templates)
-      </button>
+      <button class="btn btn-secondary" id="btn-generate-plan">⊞ Générer le plan dans Excel</button>
+      <button class="btn btn-ghost" id="btn-generate-templates" style="margin-top:6px">▦ Générer les feuilles de saisie</button>
     </div>
 
+    <!-- Import depuis Excel -->
     <div class="card">
       <div class="card-label">IMPORT DEPUIS EXCEL</div>
       <div class="form-field" style="margin-bottom:8px">
@@ -129,6 +158,7 @@
       </button>
     </div>
 
+    <!-- Aperçu -->
     <div class="card" id="preview-card" style="display:none">
       <div class="card-label">APERÇU — <span id="preview-n">0</span> MESURES</div>
       <div class="table-scroll">
@@ -139,26 +169,27 @@
       </div>
     </div>
 
+    <!-- Données de démo -->
     <div class="card">
       <div class="card-label">DONNÉES DE DÉMONSTRATION</div>
       <p class="card-note">
         <strong>Méthode indirecte</strong> — Feinberg (2010) : vitamine B3 HPLC. λ=10%, β=80%.<br>
         <strong>Méthode directe</strong> — Titrimétrie NaCl. λ=5%, β=80%.
       </p>
-      <p class="card-note" style="margin-top:4px;color:var(--text-muted)">
-        Sélectionnez le type de méthode ci-dessus, puis cliquez le bouton.
-      </p>
-      <button class="btn btn-ghost" id="btn-demo">&#x25B6; Charger les données de démonstration</button>
+      <button class="btn btn-ghost" id="btn-demo">▶ Charger les données de démonstration</button>
     </div>
 
     <div id="log-data" class="log-panel"></div>
   </section>
 
-  <!-- PANEL: CALCULS -->
+
+  <!-- ═══════════════════════════════════════════════════════
+       PANEL : CALCULS
+  ═══════════════════════════════════════════════════════ -->
   <section id="panel-calc" class="panel">
     <div class="panel-header">
       <h2>Résultats statistiques</h2>
-      <p class="panel-sub">Justesse, fidélité et intervalles de tolérance &beta;-expectation selon Mee (1984).</p>
+      <p class="panel-sub">Justesse, fidélité, intervalles β-expectation (Mee, 1984) — calculés par le backend Python.</p>
     </div>
 
     <div class="card" id="calc-empty">
@@ -169,43 +200,66 @@
     </div>
 
     <div id="calc-results" style="display:none">
-      <div class="card" id="etalonnage-card">
-        <div class="card-label">MODÈLES D'ÉTALONNAGE</div>
-        <div id="etalonnage-results" class="mono-block"></div>
+
+      <!-- Score de qualité -->
+      <div class="card" id="quality-card">
+        <div class="card-label">SCORE DE QUALITÉ GLOBAL</div>
+        <div id="quality-content"></div>
       </div>
 
+      <!-- Modèles d'étalonnage -->
+      <div class="card" id="etalonnage-card" style="display:none">
+        <div class="card-label">MODÈLES D'ÉTALONNAGE</div>
+        <div id="etalonnage-results"></div>
+      </div>
+
+      <!-- Critères -->
       <div class="card">
         <div class="card-label">CRITÈRES PAR NIVEAU — JUSTESSE ET FIDÉLITÉ</div>
         <div class="table-scroll">
           <table class="data-table results-table">
             <thead><tr>
-              <th>Niveau</th><th>X&#x0305; réf.</th><th>Z&#x0305; retrouvée</th>
-              <th>s&#x1D63;</th><th>s&#x1D61;</th><th>s&#x2071;</th><th>CV%</th>
-              <th>Biais%</th><th>Récouv.%</th>
+              <th>Niveau</th><th>X̄ réf.</th><th>Z̄ ret.</th>
+              <th>sr</th><th>sB</th><th>sFI</th><th>CV%</th><th>CVr%</th>
+              <th>Biais%</th><th>Récouv.%</th><th>Shapiro-p</th>
             </tr></thead>
             <tbody id="criteria-tbody"></tbody>
           </table>
         </div>
       </div>
 
+      <!-- Intervalles de tolérance -->
       <div class="card">
-        <div class="card-label">INTERVALLES DE TOLÉRANCE &beta;-EXPECTATION (Mee, 1984)</div>
+        <div class="card-label">INTERVALLES DE TOLÉRANCE β-EXPECTATION (Mee, 1984)</div>
         <div class="table-scroll">
           <table class="data-table results-table">
             <thead><tr>
-              <th>Niveau</th><th>X&#x0305; réf.</th><th>s&#x1D35;&#x1D40;</th>
-              <th>k&#x209C;&#x2092;&#x2097;</th><th>&nu;</th>
+              <th>Niveau</th><th>X̄ réf.</th><th>sIT</th>
+              <th>k_tol</th><th>ν</th>
               <th>LTB%</th><th>LTH%</th>
-              <th>L.A. basse%</th><th>L.A. haute%</th><th>Statut</th>
+              <th>L.A. basse%</th><th>L.A. haute%</th><th>Err. tot.%</th><th>Statut</th>
             </tr></thead>
             <tbody id="tolerance-tbody"></tbody>
           </table>
         </div>
       </div>
 
+      <!-- Tests statistiques -->
       <div class="card">
-        <div class="card-label">DÉTECTION DES ABERRANTS — TEST DE GRUBBS</div>
+        <div class="card-label">TESTS STATISTIQUES — NORMALITÉ ET HOMOGÉNÉITÉ</div>
+        <div id="stat-tests-content"></div>
+      </div>
+
+      <!-- Aberrants -->
+      <div class="card">
+        <div class="card-label">DÉTECTION DES ABERRANTS — TEST DE GRUBBS (α=5%)</div>
         <div id="outlier-results"></div>
+      </div>
+
+      <!-- Vérifications normatives -->
+      <div class="card" id="normative-card" style="display:none">
+        <div class="card-label">VÉRIFICATIONS NORMATIVES</div>
+        <div id="normative-content"></div>
       </div>
 
       <div style="padding:0 var(--gap) var(--gap)">
@@ -216,11 +270,14 @@
     </div>
   </section>
 
-  <!-- PANEL: PROFIL D'EXACTITUDE -->
+
+  <!-- ═══════════════════════════════════════════════════════
+       PANEL : PROFIL D'EXACTITUDE
+  ═══════════════════════════════════════════════════════ -->
   <section id="panel-profile" class="panel">
     <div class="panel-header">
       <h2>Profil d'exactitude</h2>
-      <p class="panel-sub">Représentation graphique des intervalles &beta;-expectation et des limites d'acceptabilité.</p>
+      <p class="panel-sub">Représentation graphique des intervalles β-expectation et des limites d'acceptabilité.</p>
     </div>
 
     <div class="card" id="profile-empty">
@@ -231,14 +288,25 @@
     </div>
 
     <div id="profile-content" style="display:none">
-      <div class="card">
-        <div class="legend-row" id="profile-legend"></div>
+      <!-- Graphique backend (image PNG) -->
+      <div class="card" id="profile-img-card" style="display:none">
+        <div class="card-label">GRAPHIQUE BACKEND (Python / matplotlib)</div>
+        <img id="profile-img" src="" alt="Profil d'exactitude" style="width:100%;border-radius:4px"/>
       </div>
 
+      <!-- Graphique local (Chart.js) -->
       <div class="card">
-        <div class="chart-container-xl">
+        <div class="card-label">GRAPHIQUE INTERACTIF (Chart.js)</div>
+        <div class="legend-row" id="profile-legend"></div>
+        <div class="chart-container-xl" style="margin-top:8px">
           <canvas id="chart-profile"></canvas>
         </div>
+      </div>
+
+      <!-- Graphique décomposition de variance -->
+      <div class="card" id="anova-img-card" style="display:none">
+        <div class="card-label">DÉCOMPOSITION DE LA VARIANCE (Backend)</div>
+        <img id="anova-img" src="" alt="ANOVA" style="width:100%;border-radius:4px"/>
       </div>
 
       <div class="card">
@@ -248,64 +316,107 @@
 
       <div class="card">
         <div class="card-label">DOMAINE DE VALIDITÉ</div>
-        <div id="validity-domain"></div>
+        <div id="validity-domain" class="validity-info"></div>
       </div>
 
-      <div style="padding:0 var(--gap) var(--gap)">
-        <button class="btn btn-secondary" id="btn-insert-chart">
+      <div style="padding:0 var(--gap) var(--gap);display:flex;gap:8px">
+        <button class="btn btn-secondary" id="btn-insert-chart" style="flex:1">
           📊 Insérer le graphique dans Excel
         </button>
       </div>
     </div>
   </section>
 
-  <!-- PANEL: IA -->
+
+  <!-- ═══════════════════════════════════════════════════════
+       PANEL : IA
+  ═══════════════════════════════════════════════════════ -->
   <section id="panel-ai" class="panel">
     <div class="panel-header">
       <h2>Interprétation par IA</h2>
-      <p class="panel-sub">Diagnostic automatique — conformité ISO 5725-2 / ICH Q2(R1).</p>
+      <p class="panel-sub">Moteur de règles expert + LLM (Gemini / Claude) — via le backend Python.</p>
     </div>
 
+    <!-- Config IA -->
     <div class="card">
-      <div class="card-label">ANALYSES DISPONIBLES</div>
-      <div class="ai-actions">
-        <button class="btn btn-primary"   id="btn-ai-full">✦ Diagnostic complet</button>
-        <button class="btn btn-secondary" id="btn-ai-profile">◈ Interpréter le profil</button>
-        <button class="btn btn-secondary" id="btn-ai-outliers">⚠ Analyser les aberrants</button>
-        <button class="btn btn-secondary" id="btn-ai-reco">📋 Recommandations</button>
+      <div class="card-label">CONFIGURATION IA</div>
+      <div class="form-grid" style="margin-bottom:8px">
+        <div class="form-field">
+          <label>Clé API (Gemini ou Claude)</label>
+          <div class="input-row">
+            <input type="password" id="ai-key" placeholder="AIza… ou sk-ant-…" autocomplete="off"/>
+            <button class="btn-icon" id="btn-save-key" title="Sauvegarder">💾</button>
+          </div>
+          <div class="api-note">
+            Gemini : <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a> (gratuit) ·
+            Claude : <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>
+          </div>
+        </div>
+        <div class="form-field">
+          <label>Fournisseur LLM</label>
+          <select id="ai-provider" class="select-field">
+            <option value="auto">Auto (Gemini en priorité)</option>
+            <option value="gemini">Gemini (Google AI Studio)</option>
+            <option value="claude">Claude (Anthropic)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field">
+        <label style="font-size:10px;color:var(--text-muted)">
+          <input type="checkbox" id="ai-use-llm" style="accent-color:var(--amber)"/>
+          &nbsp;Activer le LLM (clé API envoyée au backend)
+        </label>
       </div>
     </div>
 
+    <!-- Analyses -->
+    <div class="card">
+      <div class="card-label">ANALYSES DISPONIBLES</div>
+      <div class="ai-actions">
+        <button class="btn btn-primary"   id="btn-ai-rules">⚙ Interprétation par règles (sans clé API)</button>
+        <button class="btn btn-secondary" id="btn-ai-full">✦ Diagnostic complet (LLM)</button>
+        <button class="btn btn-secondary" id="btn-ai-profile">◈ Interpréter le profil (LLM)</button>
+        <button class="btn btn-secondary" id="btn-ai-outliers">⚠ Analyser les aberrants (LLM)</button>
+        <button class="btn btn-secondary" id="btn-ai-reco">📋 Recommandations (LLM)</button>
+      </div>
+    </div>
+
+    <!-- Résultat IA -->
     <div class="card" id="ai-result-card" style="display:none">
-      <div class="card-label">RÉSULTAT</div>
+      <div class="card-label">RÉSULTAT — <span id="ai-source-label">RÈGLES</span></div>
       <div id="ai-content" class="ai-content-box"></div>
     </div>
 
+    <!-- Chat -->
     <div class="card">
-      <div class="card-label">ASSISTANT ANALYTIQUE</div>
+      <div class="card-label">ASSISTANT ANALYTIQUE (Chat LLM)</div>
       <div id="chat-messages" class="chat-box">
         <div class="chat-msg assistant">
-          <div class="chat-bubble">Bonjour. Je suis spécialisé en validation analytique (ISO 5725-2, ICH Q2, Feinberg). Calculez votre profil puis posez vos questions.</div>
+          <div class="chat-bubble">Bonjour. Je suis spécialisé en validation analytique (ISO 5725-2, ICH Q2, Feinberg). Activez votre clé API, calculez votre profil, puis posez vos questions.</div>
         </div>
       </div>
       <div class="chat-input-row">
         <input type="text" id="chat-input" placeholder="Question sur votre méthode…"/>
-        <button class="btn-send" id="btn-chat">&#x279E;</button>
+        <button class="btn-send" id="btn-chat">➜</button>
       </div>
       <div class="chat-chips">
         <button class="chip" data-p="La méthode est-elle valide selon ISO 5725-2 ?">Validité ISO ?</button>
         <button class="chip" data-p="Expliquez les causes probables du biais au niveau 1.">Biais N1 ?</button>
         <button class="chip" data-p="Comment améliorer la fidélité intermédiaire ?">Fidélité ?</button>
         <button class="chip" data-p="Comparez aux critères ICH Q2(R1) pour méthode HPLC.">ICH Q2(R1)</button>
+        <button class="chip" data-p="Quel est le score de qualité de cette méthode et comment l'améliorer ?">Score qualité ?</button>
       </div>
     </div>
   </section>
 
-  <!-- PANEL: RAPPORT -->
+
+  <!-- ═══════════════════════════════════════════════════════
+       PANEL : RAPPORT
+  ═══════════════════════════════════════════════════════ -->
   <section id="panel-report" class="panel">
     <div class="panel-header">
       <h2>Rapport de validation</h2>
-      <p class="panel-sub">Génération du rapport complet conforme aux exigences réglementaires.</p>
+      <p class="panel-sub">Génération du rapport conforme aux exigences réglementaires.</p>
     </div>
 
     <div class="card">
@@ -336,17 +447,20 @@
         <label class="cb-row"><input type="checkbox" id="rpt-params"     checked/> Paramètres de validation</label>
         <label class="cb-row"><input type="checkbox" id="rpt-etalonnage" checked/> Modèles d'étalonnage</label>
         <label class="cb-row"><input type="checkbox" id="rpt-criteria"   checked/> Critères de justesse et fidélité</label>
-        <label class="cb-row"><input type="checkbox" id="rpt-tolerance"  checked/> Intervalles &beta;-expectation</label>
-        <label class="cb-row"><input type="checkbox" id="rpt-profile"    checked/> Profil d'exactitude</label>
+        <label class="cb-row"><input type="checkbox" id="rpt-tolerance"  checked/> Intervalles β-expectation</label>
         <label class="cb-row"><input type="checkbox" id="rpt-outliers"   checked/> Détection des aberrants</label>
+        <label class="cb-row"><input type="checkbox" id="rpt-normative"  checked/> Vérifications normatives</label>
         <label class="cb-row"><input type="checkbox" id="rpt-ai"         checked/> Interprétation IA</label>
-        <label class="cb-row"><input type="checkbox" id="rpt-reco"       checked/> Recommandations</label>
       </div>
     </div>
 
     <div class="card">
-      <button class="btn btn-primary" id="btn-report-html">
+      <div class="card-label">TÉLÉCHARGEMENT</div>
+      <button class="btn btn-primary"   id="btn-report-html" style="margin-bottom:6px">
         🌐 Télécharger le rapport HTML
+      </button>
+      <button class="btn btn-secondary" id="btn-report-pdf">
+        📄 Télécharger le rapport PDF (via backend)
       </button>
     </div>
 
@@ -356,6 +470,12 @@
 </main>
 
 <div id="toast-container"></div>
+
+<!-- Scripts modules (ordre d'import important) -->
+<script src="../modules/apiClient.js"></script>
+<script src="../modules/demoData.js"></script>
+<script src="../modules/excelBridge.js"></script>
+<script src="../modules/reportGenerator.js"></script>
 <script src="taskpane.js"></script>
 </body>
 </html>

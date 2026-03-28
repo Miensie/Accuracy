@@ -1,83 +1,50 @@
 /**
  * ================================================================
- * taskpane.js — Orchestrateur principal Accuracy Profile Add-in
+ * taskpane.js — Orchestrateur principal Accuracy Profile Add-in v2
+ * Connecté au backend Python via ApiClient
+ * Suppression de AccuracyStats (calculs déportés côté serveur)
  * ================================================================
  */
-
-
-// ─── Configuration Backend ────────────────────────────────────────────────────
-const BACKEND_URL = 'https://accuracy.onrender.com'; // Adjust if backend is on different port/host
-
-// ─── Vérification Backend ─────────────────────────────────────────────────────
-async function checkBackendHealth() {
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/health`);
-    if (!response.ok) {
-      throw new Error(`Backend non accessible: ${response.status}`);
-    }
-    const data = await response.json();
-    return data.status === 'ok';
-  } catch (error) {
-    console.error('Erreur vérification backend:', error);
-    return false;
-  }
-}
-
-async function getNormativeCriteria() {
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/norms`);
-    if (!response.ok) {
-      throw new Error(`Erreur récupération normes: ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('Erreur récupération normes:', error);
-    return null;
-  }
-}
+"use strict";
 
 // ─── État global ──────────────────────────────────────────────────────────────
 const APP = {
   planValidation:  null,
   planEtalonnage:  null,
-  results:         null,
+  results:         null,   // Réponse complète du backend v2
   config:          {},
   aiContent:       "",
+  chatHistory:     [],
   profileChart:    null,
 };
 
-// ─── Démarrage ────────────────────────────────────────────────────────────────
+// ─── Démarrage ─────────────────────────────────────────────────────────────────
 Office.onReady(info => {
   if (info.host !== Office.HostType.Excel) {
     setStatus("⚠ Excel requis");
     return;
   }
-  initApp();
+  _initApp();
 });
 
-function initApp() {
-  // Vérifier la connexion au backend
-  checkBackendHealth().then(healthy => {
-    if (!healthy) {
-      toast("⚠ Backend non accessible. Vérifiez que le serveur Python est démarré.", "warn");
-      setStatus("Backend hors ligne");
-    } else {
-      setStatus("Backend connecté ✓");
-    }
-  });
-
-  setupNavigation();
-  setupDataHandlers();
-  setupCalcHandlers();
-  setupProfileHandlers();
-  setupAIHandlers();
-  setupReportHandlers();
-  setStatus("Accuracy Profile v1.0 ✓");
-  log("Prêt. Chargez vos données ou utilisez les données Feinberg (2010).", "info");
+function _initApp() {
+  _setupNavigation();
+  _setupBackendConfig();
+  _setupDataHandlers();
+  _setupCalcHandlers();
+  _setupProfileHandlers();
+  _setupAIHandlers();
+  _setupReportHandlers();
+  setStatus("Accuracy Profile v2 ✓");
+  log("Prêt. Configurez l'URL du backend et chargez vos données.", "info");
 }
 
-// ─── Navigation ───────────────────────────────────────────────────────────────
-function setupNavigation() {
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupNavigation() {
   document.querySelectorAll(".nav-tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
@@ -88,9 +55,51 @@ function setupNavigation() {
   });
 }
 
-// ─── DONNÉES ──────────────────────────────────────────────────────────────────
-function setupDataHandlers() {
-  // Afficher/masquer le champ étalonnage selon le type de méthode
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIG BACKEND
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupBackendConfig() {
+  const urlInput = document.getElementById("backend-url");
+
+  // Restaurer l'URL sauvegardée
+  const saved = ApiClient.getBaseUrl();
+  if (saved) urlInput.value = saved;
+
+  urlInput.addEventListener("change", () => {
+    ApiClient.setBaseUrl(urlInput.value.trim());
+  });
+
+  document.getElementById("btn-ping-backend").addEventListener("click", _pingBackend);
+  // Test auto au démarrage
+  setTimeout(_pingBackend, 800);
+}
+
+async function _pingBackend() {
+  const statusEl = document.getElementById("backend-status");
+  ApiClient.setBaseUrl(document.getElementById("backend-url").value.trim());
+  statusEl.innerHTML = '<span class="spinner"></span> Test de connexion…';
+  statusEl.style.color = "var(--text-muted)";
+  try {
+    const h = await ApiClient.health();
+    statusEl.textContent = `✓ Backend connecté — numpy ${h.libs?.numpy || "?"} · scipy ${h.libs?.scipy || "?"} · v${h.version || "2"}`;
+    statusEl.style.color = "var(--valid)";
+    log(`Backend connecté : ${ApiClient.getBaseUrl()}`, "ok");
+  } catch (e) {
+    statusEl.textContent = `✗ Backend inaccessible — ${e.message}`;
+    statusEl.style.color = "var(--invalid)";
+    log("Backend inaccessible : " + e.message, "err");
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DONNÉES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupDataHandlers() {
+  // Afficher/masquer étalonnage selon le type
   document.getElementById("cfg-type").addEventListener("change", function () {
     document.getElementById("etalon-range-row").style.display =
       this.value === "indirect" ? "block" : "none";
@@ -119,30 +128,27 @@ function setupDataHandlers() {
     const I = parseInt(document.getElementById("cfg-I").value);
     const J = parseInt(document.getElementById("cfg-J").value);
     const u = document.getElementById("cfg-unite").value;
+    const methodType = document.getElementById("cfg-type").value;
 
     setBtnLoading("btn-generate-plan", true, "Génération…");
     try {
-      const methodType = document.getElementById("cfg-type").value;
       const { sheetName, rows } = await ExcelBridge.generatePlanValidation(K, I, J, u, methodType);
       toast(`✅ Plan généré : ${rows} lignes → onglet "${sheetName}"`, "info");
       log(`Plan de validation ${methodType} : K=${K}, I=${I}, J=${J}`, "ok");
-
       if (methodType === "indirect") {
         await ExcelBridge.generatePlanEtalonnage(I, 2, 2, u);
         log("Plan d'étalonnage créé (2 niveaux, 2 répétitions)", "ok");
-      } else {
-        log("Méthode directe : pas de plan d'étalonnage requis", "info");
       }
     } catch (e) {
-      toast("Erreur génération plan : " + e.message, "err");
+      toast("Erreur : " + e.message, "err");
       log("Erreur : " + e.message, "err");
     }
     setBtnLoading("btn-generate-plan", false, "⊞ Générer le plan dans Excel");
   });
 
-  // Templates vierges
+  // Templates
   document.getElementById("btn-generate-templates").addEventListener("click", async () => {
-    readConfigFromUI();
+    _readConfigFromUI();
     setBtnLoading("btn-generate-templates", true, "Génération…");
     try {
       const res = await ExcelBridge.generateBlankTemplates({
@@ -153,444 +159,416 @@ function setupDataHandlers() {
         methodType: document.getElementById("cfg-type").value,
       });
       toast("✅ Feuilles de saisie créées", "info");
-      log("Templates créés : " + [res.sheetP, res.sheetV, res.sheetE].filter(Boolean).join(", "), "ok");
+      log("Templates : " + [res.sheetP, res.sheetV, res.sheetE].filter(Boolean).join(", "), "ok");
     } catch (e) {
       toast("Erreur : " + e.message, "err");
       log("Erreur : " + e.message, "err");
     }
-    setBtnLoading("btn-generate-templates", false, "▦ Générer les feuilles de saisie (templates)");
+    setBtnLoading("btn-generate-templates", false, "▦ Générer les feuilles de saisie");
   });
 
-  // Import et calcul
-  document.getElementById("btn-import").addEventListener("click", handleImportAndCalc);
-
-  // Démo Feinberg
-  document.getElementById("btn-demo").addEventListener("click", handleDemo);
+  // Import + calcul
+  document.getElementById("btn-import").addEventListener("click", _handleImportAndCalc);
+  // Démo
+  document.getElementById("btn-demo").addEventListener("click", _handleDemo);
 }
 
-async function handleImportAndCalc() {
-  const rangeVal = document.getElementById("range-validation").value.trim();
-  const rangeEta = document.getElementById("range-etalonnage").value.trim();
+
+async function _handleImportAndCalc() {
+  const rangeVal   = document.getElementById("range-validation").value.trim();
+  const rangeEta   = document.getElementById("range-etalonnage").value.trim();
   const methodType = document.getElementById("cfg-type").value;
 
   if (!rangeVal) { toast("Saisissez la plage du plan de validation", "warn"); return; }
 
-  setBtnLoading("btn-import", true, "Import en cours…");
+  setBtnLoading("btn-import", true, "Import et calcul en cours…");
   try {
-    // Lecture depuis Excel
     APP.planValidation = await ExcelBridge.readPlanValidation(rangeVal);
-
+    APP.planEtalonnage = [];
     if (methodType === "indirect" && rangeEta) {
       APP.planEtalonnage = await ExcelBridge.readPlanEtalonnage(rangeEta);
     }
 
-    readConfigFromUI();
-    runAnalysis();
-
-    // Afficher l'aperçu
-    renderPreview();
+    _readConfigFromUI();
+    await _runAnalysis();
+    _renderPreview();
     toast(`✅ ${APP.planValidation.length} mesures importées`, "info");
-    log(`${APP.planValidation.length} mesures lues depuis Excel`, "ok");
+    log(`${APP.planValidation.length} mesures importées depuis Excel`, "ok");
   } catch (e) {
-    toast("Erreur import : " + e.message, "err");
+    toast("Erreur : " + e.message, "err");
     log("Erreur : " + e.message, "err");
   }
   setBtnLoading("btn-import", false, "⊞ Importer et calculer");
 }
 
-function handleDemo() {
+
+function _handleDemo() {
   const demoType = document.getElementById("cfg-type").value;
 
   if (demoType === "direct") {
-    // Démo méthode directe : dosage gravimétrique NaCl dans solution
     APP.planValidation = DemoData.DIRECT_VALIDATION;
     APP.planEtalonnage = [];
-
-    const cfg = DemoData.DIRECT_CONFIG;
-    document.getElementById("cfg-methode").value  = cfg.methode;
-    document.getElementById("cfg-materiau").value = cfg.materiau;
-    document.getElementById("cfg-unite").value    = cfg.unite;
-    document.getElementById("cfg-type").value     = cfg.methodType;
-    document.getElementById("cfg-lambda").value   = cfg.lambda * 100;
-    document.getElementById("cfg-beta").value     = cfg.beta * 100;
-    document.getElementById("cfg-K").value        = cfg.K;
-    document.getElementById("cfg-I").value        = cfg.I;
-    document.getElementById("cfg-J").value        = cfg.J;
-    document.getElementById("etalon-range-row").style.display = "none";
-
-    readConfigFromUI();
-    runAnalysis();
-    renderPreview();
-    toast("✅ Démo méthode directe chargée", "info");
-    log(`Cas direct : ${APP.planValidation.length} mesures`, "ok");
+    _applyDemoConfig(DemoData.DIRECT_CONFIG);
+    log(`Démo directe : ${APP.planValidation.length} mesures chargées`, "ok");
   } else {
-    // Démo méthode indirecte : Feinberg (2010)
     APP.planValidation = DemoData.FEINBERG_VALIDATION;
     APP.planEtalonnage = DemoData.FEINBERG_ETALONNAGE;
-
-    const cfg = DemoData.FEINBERG_CONFIG;
-    document.getElementById("cfg-methode").value  = cfg.methode;
-    document.getElementById("cfg-materiau").value = cfg.materiau;
-    document.getElementById("cfg-unite").value    = cfg.unite;
-    document.getElementById("cfg-type").value     = cfg.methodType;
-    document.getElementById("cfg-lambda").value   = cfg.lambda * 100;
-    document.getElementById("cfg-beta").value     = cfg.beta * 100;
-    document.getElementById("cfg-K").value        = cfg.K;
-    document.getElementById("cfg-I").value        = cfg.I;
-    document.getElementById("cfg-J").value        = cfg.J;
-    document.getElementById("etalon-range-row").style.display = "block";
-
-    readConfigFromUI();
-    runAnalysis();
-    renderPreview();
-    toast("✅ Données Feinberg (2010) chargées — méthode indirecte", "info");
-    log(`Cas Feinberg : ${APP.planValidation.length} mesures · ${APP.planEtalonnage.length} étalons`, "ok");
+    _applyDemoConfig(DemoData.FEINBERG_CONFIG);
+    log(`Démo Feinberg : ${APP.planValidation.length} mesures · ${APP.planEtalonnage.length} étalons`, "ok");
   }
+
+  _readConfigFromUI();
+  _runAnalysis().catch(e => {
+    toast("Erreur analyse : " + e.message, "err");
+    log("Erreur : " + e.message, "err");
+  });
+  _renderPreview();
+  toast("✅ Données de démonstration chargées", "info");
 }
 
-function readConfigFromUI() {
+function _applyDemoConfig(cfg) {
+  document.getElementById("cfg-methode").value  = cfg.methode;
+  document.getElementById("cfg-materiau").value = cfg.materiau;
+  document.getElementById("cfg-unite").value    = cfg.unite;
+  document.getElementById("cfg-type").value     = cfg.methodType;
+  document.getElementById("cfg-lambda").value   = (cfg.lambda ?? 0.10) * 100;
+  document.getElementById("cfg-beta").value     = (cfg.beta   ?? 0.80) * 100;
+  document.getElementById("cfg-K").value        = cfg.K || 3;
+  document.getElementById("cfg-I").value        = cfg.I || 3;
+  document.getElementById("cfg-J").value        = cfg.J || 3;
+  document.getElementById("etalon-range-row").style.display =
+    cfg.methodType === "indirect" ? "block" : "none";
+}
+
+function _readConfigFromUI() {
   APP.config = {
-    methode:    document.getElementById("cfg-methode").value  || "Méthode analytique",
-    materiau:   document.getElementById("cfg-materiau").value || "—",
-    unite:      document.getElementById("cfg-unite").value    || "",
-    methodType: document.getElementById("cfg-type").value     || "indirect",
+    methode:    document.getElementById("cfg-methode").value   || "Méthode analytique",
+    materiau:   document.getElementById("cfg-materiau").value  || "—",
+    unite:      document.getElementById("cfg-unite").value     || "",
+    methodType: document.getElementById("cfg-type").value      || "indirect",
+    modelType:  document.getElementById("cfg-model").value     || "linear",
+    framework:  document.getElementById("cfg-framework").value || "iso5725",
     lambda:     parseFloat(document.getElementById("cfg-lambda").value) / 100 || 0.10,
     beta:       parseFloat(document.getElementById("cfg-beta").value)   / 100 || 0.80,
-    modelType:  "linear",
+    alpha:      0.05,
   };
 }
 
-function runAnalysis() {
+function _renderPreview() {
   if (!APP.planValidation?.length) return;
-
-  try {
-    // Vérifier si on peut utiliser le format simple
-    const canUseSimple = APP.config.methodType === 'direct' && (!APP.planEtalonnage || APP.planEtalonnage.length === 0);
-
-    if (canUseSimple) {
-      // Utiliser l'endpoint simplifié
-      const simpleData = APP.planValidation.map(row => ({
-        concentration: row.xRef,
-        replicate: parseInt(row.rep),
-        measured: row.yResponse,
-        reference: row.xRef
-      }));
-
-      const requestData = {
-        data: simpleData,
-        config: {
-          methode: APP.config.methode,
-          materiau: APP.config.materiau,
-          unite: APP.config.unite,
-          methodType: APP.config.methodType,
-          modelType: APP.config.modelType,
-          beta: APP.config.beta,
-          lambdaVal: APP.config.lambda,
-          alpha: 0.05,
-          framework: "iso5725"
-        }
-      };
-
-      fetch(`${BACKEND_URL}/api/simple`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestData)
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        if (data.status === 'error') {
-          throw new Error(data.detail || 'Erreur de calcul');
-        }
-        APP.results = data;
-        renderCalcResults();
-        renderProfileChart();
-        log("Calculs simplifiés terminés avec succès", "ok");
-      })
-      .catch(error => {
-        toast("Erreur calcul simplifié : " + error.message, "err");
-        log("Erreur calcul simplifié : " + error.message, "err");
-        console.error(error);
-      });
-
-    } else {
-      // Utiliser l'endpoint complet
-      const requestData = {
-        planValidation: APP.planValidation.map(row => ({
-          niveau: row.niveau,
-          serie: row.serie,
-          rep: row.rep,
-          xRef: row.xRef,
-          yResponse: row.yResponse
-        })),
-        planEtalonnage: (APP.planEtalonnage || []).map(row => ({
-          serie: row.serie,
-          niveau: row.niveau,
-          rep: row.rep,
-          xEtalon: row.xEtalon,
-          yResponse: row.yResponse
-        })),
-        config: {
-          methode: APP.config.methode,
-          materiau: APP.config.materiau,
-          unite: APP.config.unite,
-          methodType: APP.config.methodType,
-          modelType: APP.config.modelType,
-          beta: APP.config.beta,
-          lambdaVal: APP.config.lambda,
-          alpha: 0.05,
-          framework: "iso5725"
-        }
-      };
-
-      fetch(`${BACKEND_URL}/accuracy-profile`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestData)
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        if (data.status === 'error') {
-          throw new Error(data.detail || 'Erreur de calcul');
-        }
-        APP.results = data;
-        renderCalcResults();
-        renderProfileChart();
-        log("Calculs complets terminés avec succès", "ok");
-      })
-      .catch(error => {
-        toast("Erreur calcul complet : " + error.message, "err");
-        log("Erreur calcul complet : " + error.message, "err");
-        console.error(error);
-      });
-    }
-
-  } catch (e) {
-    toast("Erreur préparation données : " + e.message, "err");
-    log("Erreur préparation : " + e.message, "err");
-    console.error(e);
-  }
-}
-
-function renderPreview() {
-  if (!APP.planValidation?.length) return;
-
-  // Headers
-  const thead = document.getElementById("preview-thead");
-  thead.innerHTML = `<tr>
-    <th>Niveau</th><th>Série</th><th>Rép.</th>
-    <th>X réf.</th><th>Y réponse</th>
-  </tr>`;
-
-  const tbody = document.getElementById("preview-tbody");
-  tbody.innerHTML = APP.planValidation.slice(0, 12).map(r => `<tr>
-    <td>${r.niveau}</td><td>${r.serie}</td><td>${r.rep}</td>
-    <td>${r.xRef}</td><td>${r.yResponse}</td>
-  </tr>`).join("");
-
-  if (APP.planValidation.length > 12) {
-    tbody.innerHTML += `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);font-style:italic">… et ${APP.planValidation.length - 12} autres lignes</td></tr>`;
-  }
-
+  document.getElementById("preview-thead").innerHTML = `
+    <tr><th>Niveau</th><th>Série</th><th>Rép.</th><th>X réf.</th><th>Y réponse</th></tr>`;
+  const rows = APP.planValidation.slice(0, 12);
+  document.getElementById("preview-tbody").innerHTML =
+    rows.map(r => `<tr>
+      <td>${r.niveau}</td><td>${r.serie}</td><td>${r.rep}</td>
+      <td>${r.xRef}</td><td>${r.yResponse}</td>
+    </tr>`).join("") +
+    (APP.planValidation.length > 12
+      ? `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);font-style:italic">
+           … et ${APP.planValidation.length - 12} autres lignes</td></tr>`
+      : "");
   document.getElementById("preview-n").textContent = APP.planValidation.length;
   document.getElementById("preview-card").style.display = "block";
 }
 
-// ─── CALCULS ──────────────────────────────────────────────────────────────────
-function setupCalcHandlers() {
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANALYSE — APPEL BACKEND
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function _runAnalysis() {
+  if (!APP.planValidation?.length) return;
+
+  const useLLM = document.getElementById("ai-use-llm")?.checked && ApiClient.hasApiKey();
+
+  setStatus("Analyse en cours…");
+  log("Envoi des données au backend Python…", "info");
+
+  try {
+    APP.results = await ApiClient.analyze({
+      planValidation: APP.planValidation,
+      planEtalonnage: APP.planEtalonnage || [],
+      config:         APP.config,
+      charts:         true,
+      chartFormat:    "png_base64",
+      normative:      true,
+      interpret:      true,
+      useLLM,
+    });
+
+    if (APP.results.status === "error") {
+      throw new Error(APP.results.detail || "Erreur de calcul backend");
+    }
+
+    const dur   = APP.results.meta?.duration_s ?? "?";
+    const score = APP.results.qualityScore?.overall;
+    const label = APP.results.qualityScore?.label || "";
+    log(`Backend : calculs terminés en ${dur}s — Score qualité : ${score}/100 (${label})`, "ok");
+    setStatus(`Score : ${score}/100 (${label})`);
+
+    // Rendu des résultats
+    _renderCalcResults();
+    _renderProfileChart();
+
+  } catch (e) {
+    toast("Erreur backend : " + e.message, "err");
+    log("Erreur : " + e.message, "err");
+    setStatus("⚠ Erreur backend");
+    throw e;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CALCULS — RENDU
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupCalcHandlers() {
   document.getElementById("btn-write-results").addEventListener("click", async () => {
     if (!APP.results) { toast("Aucun résultat à écrire", "warn"); return; }
     setBtnLoading("btn-write-results", true, "Écriture…");
     try {
-      await ExcelBridge.writeAnalysisResults(APP.results, APP.config);
-      toast("✅ Résultats écrits dans Excel", "info");
+      const sheet = await ExcelBridge.writeAnalysisResults(APP.results, APP.config);
+      toast(`✅ Résultats écrits → onglet "${sheet}"`, "info");
     } catch (e) { toast("Erreur : " + e.message, "err"); }
     setBtnLoading("btn-write-results", false, "📊 Écrire les résultats dans Excel");
   });
 }
 
-function renderCalcResults() {
-  const { models, criteria, tolerances, outliers } = APP.results;
+function _renderCalcResults() {
+  const { models = {}, criteria = [], tolerances = [], outliers = [],
+          normativeChecks = [], normality = [], homogeneity = {},
+          qualityScore = {}, interpretation = [] } = APP.results;
 
-  // Modèles d'étalonnage
+  // ── Score qualité ────────────────────────────────────────────────────────────
+  if (qualityScore.overall !== undefined) {
+    const scoreColor = qualityScore.overall >= 75 ? "var(--valid)"
+                     : qualityScore.overall >= 55 ? "var(--warning)" : "var(--invalid)";
+    document.getElementById("quality-content").innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+        ${_scoreCard("Global", qualityScore.overall, qualityScore.label, scoreColor)}
+        ${_scoreCard("Justesse", qualityScore.justesse)}
+        ${_scoreCard("Fidélité", qualityScore.fidelite)}
+        ${_scoreCard("Profil", qualityScore.profil)}
+        ${_scoreCard("Normalité", qualityScore.normalite)}
+        ${_scoreCard("Homogénéité", qualityScore.homogeneite)}
+      </div>
+      ${(qualityScore.details || []).map(d => `<div class="api-note">⚠ ${d}</div>`).join("")}`;
+  }
+
+  // ── Modèles d'étalonnage ─────────────────────────────────────────────────────
   const etaCard = document.getElementById("etalonnage-card");
   if (APP.config.methodType === "indirect" && Object.keys(models).length > 0) {
     etaCard.style.display = "block";
-    document.getElementById("etalonnage-results").innerHTML = Object.entries(models)
-      .map(([serie, m]) => `
-        <div class="mono-block">
-          <div style="font-weight:600;color:var(--amber-dim);margin-bottom:4px">${serie}</div>
-          <div>Y = <span style="color:var(--navy-800)">${m.a1.toFixed(4)}</span>·X + <span style="color:var(--navy-800)">${m.a0.toFixed(4)}</span></div>
-          <div style="color:var(--text-muted);font-size:10px">R² = ${m.r2.toFixed(6)} · r = ${m.r.toFixed(6)} · N = ${m.n}</div>
-        </div>`).join("");
+    document.getElementById("etalonnage-results").innerHTML = Object.entries(models).map(([serie, m]) => `
+      <div class="mono-block" style="margin-bottom:6px">
+        <div class="model-row">
+          <span class="model-label">${serie}</span>
+          <span>Y = <strong>${(m.a1||0).toFixed(4)}</strong>·X + ${(m.a0||0).toFixed(4)}
+            <span style="color:var(--text-muted);font-size:9px;margin-left:8px">
+              R²=${(m.r2||0).toFixed(6)} · r=${(m.r||0).toFixed(6)} · n=${m.n} · RMSE=${(m.rmse||0).toFixed(4)}
+            </span>
+          </span>
+        </div>
+      </div>`).join("");
   } else {
     etaCard.style.display = "none";
   }
 
-  // Critères
-  const tbody = document.getElementById("criteria-tbody");
-  tbody.innerHTML = criteria.map(c => {
-    const biasClass = Math.abs(c.bRel) > APP.config.lambda * 100 ? "color:var(--invalid);font-weight:600" : "";
+  // ── Critères ISO 5725-2 ───────────────────────────────────────────────────────
+  const lambda = APP.config.lambda ?? 0.10;
+  document.getElementById("criteria-tbody").innerHTML = criteria.map(c => {
+    const biasFlag = Math.abs(c.bRel) > lambda * 100;
     return `<tr>
-      <td>${c.niveau}</td>
-      <td>${c.xMean.toFixed(4)}</td>
-      <td>${c.zMean.toFixed(4)}</td>
-      <td>${c.sr.toFixed(4)}</td>
-      <td>${c.sB.toFixed(4)}</td>
-      <td>${c.sFI.toFixed(4)}</td>
-      <td>${c.cv.toFixed(2)}</td>
-      <td style="${biasClass}">${c.bRel.toFixed(3)}</td>
-      <td>${c.recouvMoy.toFixed(3)}</td>
+      <td><strong>${c.niveau}</strong></td>
+      <td>${(c.xMean||0).toFixed(4)}</td>
+      <td>${(c.zMean||0).toFixed(4)}</td>
+      <td>${(c.sr||0).toFixed(4)}</td>
+      <td>${(c.sB||0).toFixed(4)}</td>
+      <td>${(c.sFI||0).toFixed(4)}</td>
+      <td>${(c.cv||0).toFixed(2)}</td>
+      <td>${(c.cvR||0).toFixed(2)}</td>
+      <td style="${biasFlag ? "color:var(--invalid);font-weight:700" : ""}">${(c.bRel||0).toFixed(3)}</td>
+      <td>${(c.recouvMoy||0).toFixed(3)}</td>
+      <td>${c.shapiro_p != null ? (c.shapiro_p).toFixed(4) + (c.shapiro_normal ? " ✓" : " ✗") : "—"}</td>
     </tr>`;
   }).join("");
 
-  // Intervalles de tolérance
-  const tbody2 = document.getElementById("tolerance-tbody");
-  tbody2.innerHTML = tolerances.map(t => `<tr>
-    <td>${t.niveau}</td>
-    <td>${t.xMean.toFixed(4)}</td>
-    <td>${t.sIT.toFixed(4)}</td>
-    <td>${t.ktol.toFixed(4)}</td>
+  // ── Intervalles de tolérance ─────────────────────────────────────────────────
+  document.getElementById("tolerance-tbody").innerHTML = tolerances.map(t => `<tr>
+    <td><strong>${t.niveau}</strong></td>
+    <td>${(t.xMean||0).toFixed(4)}</td>
+    <td>${(t.sIT||0).toFixed(4)}</td>
+    <td>${(t.ktol||0).toFixed(4)}</td>
     <td>${t.nu}</td>
-    <td>${(t.ltbRel || 0).toFixed(3)}</td>
-    <td>${(t.lthRel || 0).toFixed(3)}</td>
-    <td>${t.laBasse.toFixed(1)}</td>
-    <td>${t.laHaute.toFixed(1)}</td>
+    <td>${(t.ltbRel||0).toFixed(3)}</td>
+    <td>${(t.lthRel||0).toFixed(3)}</td>
+    <td>${(t.laBasse||90).toFixed(1)}</td>
+    <td>${(t.laHaute||110).toFixed(1)}</td>
+    <td>${(t.errorTotal||0).toFixed(3)}</td>
     <td><span class="status-${t.accept ? "valid" : "invalid"}">${t.accept ? "VALIDE" : "NON VALIDE"}</span></td>
   </tr>`).join("");
 
-  // Aberrants
-  const outlierEl = document.getElementById("outlier-results");
-  outlierEl.innerHTML = outliers.map(o => {
-    const cls = o.grubbs.suspect ? "aberrant" : "ok";
+  // ── Tests statistiques ────────────────────────────────────────────────────────
+  const levene = homogeneity?.levene;
+  document.getElementById("stat-tests-content").innerHTML = `
+    <div style="font-family:var(--font-data);font-size:10px;line-height:2">
+      <div><strong>Normalité (Shapiro-Wilk) :</strong>
+        ${normality.map(n =>
+          `Niv.${n.niveau} : W=${(n.stat||0).toFixed(4)} p=${(n.p_value||0).toFixed(4)} ${n.normal ? "✓" : "✗"}`
+        ).join(" · ") || "—"}
+      </div>
+      ${levene ? `<div><strong>Homogénéité (Levene) :</strong>
+        stat=${(levene.stat||0).toFixed(4)} p=${(levene.p_value||0).toFixed(4)}
+        → ${levene.homogeneous ? "✓ Variances homogènes" : "⚠ Hétérogénéité détectée"}
+      </div>` : ""}
+    </div>`;
+
+  // ── Aberrants (Grubbs) ────────────────────────────────────────────────────────
+  document.getElementById("outlier-results").innerHTML = outliers.map(o => {
+    const cls = o.suspect ? (o.classification === "aberrant" ? "aberrant" : "suspect") : "ok";
     return `<div class="outlier-row ${cls}">
-      <strong>Niveau ${o.niveau}</strong> (X̄=${o.xMean.toFixed(3)}, n=${o.n}) —
-      G=${o.grubbs.G} / G<sub>crit</sub>=${o.grubbs.Gcrit} →
-      ${o.grubbs.suspect
-        ? `⚠ <strong>ABERRANT détecté</strong> : ${o.grubbs.suspectVal?.toFixed(4)}`
+      <strong>Niveau ${o.niveau}</strong> (X̄=${(o.xMean||0).toFixed(3)}, n=${o.n}) —
+      G=${(o.G||0).toFixed(4)} / G<sub>crit</sub>=${(o.Gcrit||0).toFixed(4)}
+      → ${o.suspect
+        ? `⚠ <strong>${(o.classification||"SUSPECT").toUpperCase()}</strong> : ${(o.suspectVal||0).toFixed(6)}`
         : "✅ Aucun aberrant"}
     </div>`;
   }).join("");
+
+  // ── Vérifications normatives ──────────────────────────────────────────────────
+  const normCard = document.getElementById("normative-card");
+  if (normativeChecks?.length > 0) {
+    normCard.style.display = "block";
+    document.getElementById("normative-content").innerHTML = normativeChecks.map(item =>
+      `<div class="outlier-row ${_sevToClass(item.severity)}" style="flex-direction:column;gap:2px">
+        <div><strong>[${item.category}]</strong></div>
+        <div>${item.message}</div>
+      </div>`
+    ).join("");
+  } else {
+    normCard.style.display = "none";
+  }
 
   document.getElementById("calc-empty").style.display   = "none";
   document.getElementById("calc-results").style.display = "block";
 }
 
-// ─── PROFIL D'EXACTITUDE ──────────────────────────────────────────────────────
-function setupProfileHandlers() {
+function _scoreCard(label, val, sub = "", color = "var(--navy-800)") {
+  return `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:8px;text-align:center">
+    <div style="font-size:18px;font-weight:700;color:${color}">${val != null ? val.toFixed(0) : "—"}</div>
+    <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">${label}</div>
+    ${sub ? `<div style="font-size:9px;color:${color};font-weight:600">${sub}</div>` : ""}
+  </div>`;
+}
+
+function _sevToClass(sev) {
+  return { success: "ok", info: "ok", warning: "suspect", critical: "aberrant" }[sev] || "ok";
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROFIL D'EXACTITUDE — RENDU
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupProfileHandlers() {
   document.getElementById("btn-insert-chart").addEventListener("click", async () => {
     if (!APP.results) { toast("Aucun profil à insérer", "warn"); return; }
     setBtnLoading("btn-insert-chart", true, "Insertion…");
     try {
-      const sheet = await ExcelBridge.insertProfileChart(APP.results.tolerances, APP.config);
+      const chartBase64 = APP.results.charts?.profile || null;
+      const sheet = await ExcelBridge.insertProfileChart(
+        APP.results.tolerances, APP.config, chartBase64
+      );
       toast(`✅ Graphique inséré → onglet "${sheet}"`, "info");
     } catch (e) { toast("Erreur : " + e.message, "err"); }
     setBtnLoading("btn-insert-chart", false, "📊 Insérer le graphique dans Excel");
   });
 }
 
-function renderProfileChart() {
+function _renderProfileChart() {
   if (!APP.results?.tolerances?.length) return;
 
-  const tolerances = APP.results.tolerances;
-  const validity   = APP.results.validity;
-  const laBasse    = tolerances[0].laBasse;
-  const laHaute    = tolerances[0].laHaute;
+  const { tolerances, validity = {}, charts = {} } = APP.results;
+  const lambda   = APP.config.lambda ?? 0.10;
+  const beta     = APP.config.beta   ?? 0.80;
+  const laBasse  = tolerances[0]?.laBasse ?? (1 - lambda) * 100;
+  const laHaute  = tolerances[0]?.laHaute ?? (1 + lambda) * 100;
 
-  // Légende
+  // ── Image backend (PNG) ─────────────────────────────────────────────────────
+  if (charts.profile) {
+    const imgCard = document.getElementById("profile-img-card");
+    const img     = document.getElementById("profile-img");
+    img.src       = charts.profile;
+    imgCard.style.display = "block";
+  }
+  if (charts.anova) {
+    const anovaCard = document.getElementById("anova-img-card");
+    const anovaImg  = document.getElementById("anova-img");
+    anovaImg.src    = charts.anova;
+    anovaCard.style.display = "block";
+  }
+
+  // ── Légende graphique interactif ────────────────────────────────────────────
   document.getElementById("profile-legend").innerHTML = `
     <div class="legend-item">
-      <div class="legend-line" style="background:#F5A623;height:2px"></div>
+      <div class="legend-line" style="background:#F5A623"></div>
       <span>Taux de recouvrement</span>
     </div>
     <div class="legend-item">
-      <div class="legend-line" style="border-top:2px solid #1A3050;width:18px"></div>
-      <span>LTB / LTH (β-expectation)</span>
+      <div class="legend-line" style="border-top:2px solid #1A3050;width:18px;background:none"></div>
+      <span>LTB / LTH (${(beta*100).toFixed(0)}%-expectation)</span>
     </div>
     <div class="legend-item">
-      <div class="legend-line dashed" style="color:#EF4444;border-top-width:2px;width:18px"></div>
-      <span>Limites d'acceptabilité (±${(APP.config.lambda*100).toFixed(0)}%)</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-line dashed" style="color:#9ca3af;border-top-width:1px;width:18px"></div>
-      <span>Référence 100%</span>
+      <div class="legend-line dashed" style="color:#EF4444;border-top-width:2px;width:18px;background:none"></div>
+      <span>Limites d'acceptabilité (±${(lambda*100).toFixed(0)}%)</span>
     </div>`;
 
-  // Données
-  const labels  = tolerances.map(t => `${t.xMean.toFixed(3)} ${APP.config.unite || ""}`);
-  const recouv  = tolerances.map(t => +(t.recouvRel || 100).toFixed(3));
-  const ltb     = tolerances.map(t => +(t.ltbRel || 0).toFixed(3));
-  const lth     = tolerances.map(t => +(t.lthRel || 0).toFixed(3));
-  const ref100  = tolerances.map(() => 100);
-  const laLow   = tolerances.map(() => laBasse);
-  const laHigh  = tolerances.map(() => laHaute);
+  // ── Chart.js interactif ─────────────────────────────────────────────────────
+  const labels      = tolerances.map(t => `${t.xMean.toFixed(3)} ${APP.config.unite || ""}`);
+  const recouv      = tolerances.map(t => +((t.recouvRel || 100).toFixed(3)));
+  const ltb         = tolerances.map(t => +((t.ltbRel || 0).toFixed(3)));
+  const lth         = tolerances.map(t => +((t.lthRel || 0).toFixed(3)));
+  const pointColors = tolerances.map(t => t.accept ? "#22C55E" : "#EF4444");
 
-  // Couleurs des points selon validité
-  const recouvColors = tolerances.map(t => t.accept ? "#F5A623" : "#EF4444");
-
-  // Détruire l'ancien graphique
   if (APP.profileChart) { APP.profileChart.destroy(); APP.profileChart = null; }
 
-  const canvas = document.getElementById("chart-profile");
-  APP.profileChart = new Chart(canvas, {
+  APP.profileChart = new Chart(document.getElementById("chart-profile"), {
     type: "line",
     data: {
       labels,
       datasets: [
         {
-          label: "Taux de recouvrement (%)",
-          data: recouv,
-          borderColor: "#F5A623",
-          backgroundColor: "rgba(245,166,35,0.08)",
-          pointBackgroundColor: recouvColors,
-          pointRadius: 6, pointHoverRadius: 8,
-          borderWidth: 2, tension: 0.3, fill: false,
+          label: "Taux de recouvrement (%)", data: recouv,
+          borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)",
+          pointBackgroundColor: pointColors, pointRadius: 7, pointHoverRadius: 9,
+          borderWidth: 2.5, tension: 0.3, fill: false,
         },
         {
-          label: "LTB (%)",
-          data: ltb,
-          borderColor: "#1A3050",
-          backgroundColor: "rgba(26,48,80,0.06)",
-          pointRadius: 3, borderWidth: 1.5, tension: 0.3,
-          fill: "+1",
+          label: "LTB (%)", data: ltb,
+          borderColor: "#1A3050", backgroundColor: "rgba(26,48,80,0.06)",
+          pointRadius: 4, borderWidth: 1.5, tension: 0.3, fill: "+1",
         },
         {
-          label: "LTH (%)",
-          data: lth,
-          borderColor: "#1A3050",
-          pointRadius: 3, borderWidth: 1.5, tension: 0.3,
-          fill: false,
+          label: "LTH (%)", data: lth,
+          borderColor: "#1A3050", pointRadius: 4, borderWidth: 1.5, tension: 0.3, fill: false,
         },
         {
           label: `L.Accept. basse (${laBasse.toFixed(0)}%)`,
-          data: laLow,
-          borderColor: "#EF4444",
-          borderDash: [7, 4], pointRadius: 0, borderWidth: 1.5, fill: false,
+          data: tolerances.map(() => laBasse),
+          borderColor: "#EF4444", borderDash: [7,4], pointRadius: 0, borderWidth: 1.5, fill: false,
         },
         {
           label: `L.Accept. haute (${laHaute.toFixed(0)}%)`,
-          data: laHigh,
-          borderColor: "#EF4444",
-          borderDash: [7, 4], pointRadius: 0, borderWidth: 1.5, fill: false,
+          data: tolerances.map(() => laHaute),
+          borderColor: "#EF4444", borderDash: [7,4], pointRadius: 0, borderWidth: 1.5, fill: false,
         },
         {
           label: "Référence 100%",
-          data: ref100,
-          borderColor: "rgba(140,160,185,0.4)",
-          borderDash: [3, 3], pointRadius: 0, borderWidth: 1, fill: false,
+          data: tolerances.map(() => 100),
+          borderColor: "rgba(140,160,185,0.4)", borderDash: [3,3],
+          pointRadius: 0, borderWidth: 1, fill: false,
         },
       ],
     },
@@ -598,7 +576,7 @@ function renderProfileChart() {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { labels: { color: "#4A6080", font: { size: 10, family: "'IBM Plex Mono'" }, boxWidth: 14 } },
+        legend: { labels: { color: "#4A6080", font: { size: 9, family: "'IBM Plex Mono'" }, boxWidth: 14 } },
         tooltip: {
           callbacks: {
             label: ctx => ` ${ctx.dataset.label}: ${ctx.raw?.toFixed(3)}%`,
@@ -607,172 +585,182 @@ function renderProfileChart() {
       },
       scales: {
         x: {
-          ticks: { color: "#4A6080", font: { size: 9, family: "'IBM Plex Mono'" } },
+          ticks: { color: "#4A6080", font: { size: 9 } },
           grid:  { color: "rgba(180,200,220,0.3)" },
-          title: { display: true, text: `Concentration de référence (${APP.config.unite || ""})`, color: "#4A6080", font: { size: 9 } },
+          title: { display: true, text: `Concentration (${APP.config.unite || ""})`, color: "#4A6080", font: { size: 9 } },
         },
         y: {
-          ticks: { color: "#4A6080", font: { size: 9, family: "'IBM Plex Mono'" }, callback: v => v + "%" },
+          ticks: { color: "#4A6080", font: { size: 9 }, callback: v => v + "%" },
           grid:  { color: "rgba(180,200,220,0.3)" },
-          title: { display: true, text: "Taux de recouvrement (%)", color: "#4A6080", font: { size: 9 } },
-          suggestedMin: Math.min(laBasse - 10, ...ltb) - 2,
-          suggestedMax: Math.max(laHaute + 10, ...lth) + 2,
+          title: { display: true, text: "Recouvrement / Intervalle (%)", color: "#4A6080", font: { size: 9 } },
+          suggestedMin: Math.min(laBasse - 8, ...ltb) - 2,
+          suggestedMax: Math.max(laHaute + 8, ...lth) + 2,
         },
       },
     },
   });
 
-  // Verdict
-  const { valid, partial, invalid, nValid, nTotal, pct, domain } = validity;
+  // ── Verdict ─────────────────────────────────────────────────────────────────
+  const { valid, partial, nValid, nTotal, pct, validDomain } = validity;
+  const domainStr = validDomain
+    ? `${(validDomain.xMin||0).toFixed(3)} – ${(validDomain.xMax||0).toFixed(3)} ${APP.config.unite || ""}`
+    : "—";
   const verdictEl = document.getElementById("verdict-box");
+
   if (valid) {
     verdictEl.className = "verdict-box verdict-valid";
-    verdictEl.innerHTML = `<strong>✅ MÉTHODE VALIDE</strong> — Les ${nTotal} niveaux de concentration respectent les critères β-expectation.<br>
-      Le procédé analytique produit des résultats dans les limites d'acceptabilité ±${(APP.config.lambda*100).toFixed(0)}% avec une probabilité de ${(APP.config.beta*100).toFixed(0)}%.`;
+    verdictEl.innerHTML = `<strong>✅ MÉTHODE VALIDE</strong> — ${nTotal} niveaux respectent les critères
+      β-expectation.<br>Résultats dans ±${(lambda*100).toFixed(0)}% avec probabilité ${(beta*100).toFixed(0)}%.
+      Domaine : <strong>${domainStr}</strong>`;
   } else if (partial) {
     verdictEl.className = "verdict-box verdict-partial";
-    verdictEl.innerHTML = `<strong>⚠ MÉTHODE PARTIELLEMENT VALIDE</strong> — ${nValid}/${nTotal} niveaux validés (${pct}%).<br>
-      La méthode est valide uniquement sur la plage : <strong>${domain?.min.toFixed(3)} – ${domain?.max.toFixed(3)} ${APP.config.unite || ""}</strong>.`;
+    verdictEl.innerHTML = `<strong>⚠ MÉTHODE PARTIELLEMENT VALIDE</strong> — ${nValid}/${nTotal} niveaux (${pct}%).<br>
+      Domaine validé : <strong>${domainStr}</strong>`;
   } else {
     verdictEl.className = "verdict-box verdict-invalid";
-    verdictEl.innerHTML = `<strong>❌ MÉTHODE NON VALIDE</strong> — Aucun niveau ne respecte les critères β-expectation.<br>
-      La méthode ne peut pas être utilisée en routine dans les conditions actuelles.`;
+    verdictEl.innerHTML = `<strong>❌ MÉTHODE NON VALIDE</strong> — Aucun niveau ne respecte λ=±${(lambda*100).toFixed(0)}%.
+      Révision du protocole nécessaire.`;
   }
 
-  // Domaine de validité
-  const domainEl = document.getElementById("validity-domain");
-  domainEl.innerHTML = tolerances.map(t => `
+  // ── Domaine de validité ───────────────────────────────────────────────────────
+  document.getElementById("validity-domain").innerHTML = tolerances.map(t => `
     <div class="validity-row">
-      <div class="validity-dot" style="background:${t.accept ? "#22C55E" : "#EF4444"}"></div>
-      <span>Niveau ${t.niveau} — <strong>${t.xMean.toFixed(3)} ${APP.config.unite || ""}</strong> :
-        Récouv.=${t.recouvRel.toFixed(2)}% | LTB=${(t.ltbRel||0).toFixed(2)}% / LTH=${(t.lthRel||0).toFixed(2)}%
+      <div class="validity-dot" style="background:${t.accept ? "var(--valid)" : "var(--invalid)"}"></div>
+      <span>Niveau ${t.niveau} — <strong>${t.xMean.toFixed(3)} ${APP.config.unite||""}</strong> :
+        Récouv.=${(t.recouvRel||0).toFixed(2)}% | LTB=${(t.ltbRel||0).toFixed(2)}% / LTH=${(t.lthRel||0).toFixed(2)}%
+        | Err.tot.=${(t.errorTotal||0).toFixed(2)}%
         → <strong>${t.accept ? "VALIDE" : "NON VALIDE"}</strong>
       </span>
     </div>`).join("");
 
-  document.getElementById("profile-empty").style.display    = "none";
-  document.getElementById("profile-content").style.display  = "block";
+  document.getElementById("profile-empty").style.display   = "none";
+  document.getElementById("profile-content").style.display = "block";
 }
 
-// ─── IA ───────────────────────────────────────────────────────────────────────
-function setupAIHandlers() {
-  const aiMap = {
-    "btn-ai-full":    async () => await callBackendInterpret("full"),
-    "btn-ai-profile": async () => await callBackendInterpret("profile"),
-    "btn-ai-outliers":async () => await callBackendInterpret("outliers"),
-    "btn-ai-reco":    async () => await callBackendInterpret("recommendations"),
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupAIHandlers() {
+  // Clé et provider
+  document.getElementById("btn-save-key").addEventListener("click", () => {
+    const key      = document.getElementById("ai-key").value.trim();
+    const provider = document.getElementById("ai-provider").value;
+    if (!key) { toast("Saisissez votre clé API", "warn"); return; }
+    ApiClient.setApiKey(key);
+    ApiClient.setProvider(provider);
+    toast("✅ Clé API et fournisseur sauvegardés", "info");
+    log(`IA : provider=${provider}`, "ok");
+  });
+
+  // Interprétation par règles (sans LLM)
+  document.getElementById("btn-ai-rules").addEventListener("click", async () => {
+    if (!APP.results) { toast("Calculez d'abord le profil d'exactitude", "warn"); return; }
+    setBtnLoading("btn-ai-rules", true, "Analyse en cours…");
+    _showAIResult('<span class="spinner"></span> Moteur de règles…', "RÈGLES");
+    try {
+      const res = await ApiClient.interpret(APP.results, APP.config, "full", false);
+      const items = res.items || [];
+      APP.aiContent = items.map(i => `[${i.category}] ${i.message}`).join("\n");
+      _showAIResult(
+        items.map(i => `
+          <div style="padding:5px 8px;border-radius:4px;margin-bottom:4px;
+            background:var(--${_sevBg(i.severity)});border-left:2px solid var(--${_sevColor(i.severity)});
+            font-size:11px">
+            <strong>[${i.category}]</strong> ${i.message}
+          </div>`).join(""),
+        "RÈGLES EXPERTES"
+      );
+      toast("✅ Interprétation terminée", "info");
+    } catch (e) {
+      _showAIResult(`<span style="color:var(--invalid)">❌ ${e.message}</span>`, "ERREUR");
+      toast(e.message, "err");
+    }
+    setBtnLoading("btn-ai-rules", false, "⚙ Interprétation par règles (sans clé API)");
+  });
+
+  // Actions LLM
+  const llmActions = {
+    "btn-ai-full":     { type: "full",            label: "✦ Diagnostic complet (LLM)" },
+    "btn-ai-profile":  { type: "profile",         label: "◈ Interpréter le profil (LLM)" },
+    "btn-ai-outliers": { type: "outliers",        label: "⚠ Analyser les aberrants (LLM)" },
+    "btn-ai-reco":     { type: "recommendations", label: "📋 Recommandations (LLM)" },
   };
 
-  const btnLabels = {
-    "btn-ai-full":     "✦ Diagnostic complet",
-    "btn-ai-profile":  "◈ Interpréter le profil",
-    "btn-ai-outliers": "⚠ Analyser les aberrants",
-    "btn-ai-reco":     "📋 Recommandations",
-  };
-
-  Object.entries(aiMap).forEach(([btnId, fn]) => {
+  Object.entries(llmActions).forEach(([btnId, { type, label }]) => {
     document.getElementById(btnId).addEventListener("click", async () => {
-      if (!APP.results) { toast("Calculez d'abord le profil d'exactitude", "warn"); return; }
+      if (!APP.results)           { toast("Calculez d'abord le profil d'exactitude", "warn"); return; }
+      if (!ApiClient.hasApiKey()) { toast("Configurez votre clé API dans l'onglet IA", "warn"); return; }
 
-      setBtnLoading(btnId, true, "Analyse IA…");
-      document.getElementById("ai-result-card").style.display = "block";
-      document.getElementById("ai-content").innerHTML = '<span class="spinner"></span> Gemini analyse votre profil d\'exactitude…';
+      setBtnLoading(btnId, true, "Analyse LLM…");
+      _showAIResult('<span class="spinner"></span> Analyse par IA en cours…', "LLM");
 
       try {
-        const result = await fn();
-        APP.aiContent = result.text || result.items.join('\n');
-        document.getElementById("ai-content").innerHTML = formatAIContent(result);
+        const provider = document.getElementById("ai-provider").value;
+        ApiClient.setProvider(provider);
+        const res = await ApiClient.interpret(APP.results, APP.config, type, true);
+        const text = res.text || res.items?.map(i => `[${i.category}] ${i.message}`).join("\n") || "—";
+        APP.aiContent = text;
+        _showAIResult(_formatAIText(text), `LLM — ${provider.toUpperCase()}`);
         toast("✅ Analyse IA terminée", "info");
       } catch (e) {
-        document.getElementById("ai-content").innerHTML = `<span style="color:var(--invalid)">❌ ${e.message}</span>`;
+        _showAIResult(`<span style="color:var(--invalid)">❌ ${e.message}</span>`, "ERREUR");
         toast(e.message, "err");
       }
-      setBtnLoading(btnId, false, btnLabels[btnId]);
+      setBtnLoading(btnId, false, label);
     });
   });
 
-  document.getElementById("btn-chat").addEventListener("click", handleChat);
+  // Chat
+  document.getElementById("btn-chat").addEventListener("click", _handleChat);
   document.getElementById("chat-input").addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _handleChat(); }
   });
   document.querySelectorAll(".chip").forEach(chip => {
     chip.addEventListener("click", () => {
       document.getElementById("chat-input").value = chip.dataset.p;
-      handleChat();
+      _handleChat();
     });
   });
 }
 
-async function callBackendInterpret(promptType) {
-  const response = await fetch(`${BACKEND_URL}/api/interpret?provider=gemini&prompt_type=${promptType}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      analysis_data: APP.results,
-      config: APP.config
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
-  }
-
-  return await response.json();
-}
-
-function formatAIContent(result) {
-  if (result.source === 'llm') {
-    return result.text.replace(/\n/g, '<br>');
-  } else if (result.items) {
-    return result.items.map(item => `<div>${item}</div>`).join('');
-  }
-  return 'Aucune réponse';
-}
-
-async function handleChat() {
+async function _handleChat() {
   const input = document.getElementById("chat-input");
   const msg   = input.value.trim();
-  if (!msg) return;
+  if (!msg)                    return;
+  if (!ApiClient.hasApiKey()) { toast("Configurez la clé API dans l'onglet IA", "warn"); return; }
 
   input.value = "";
-  appendChat("user", msg);
-  const typingId = appendChat("assistant", '<span class="spinner"></span>');
+  _appendChat("user", msg);
+  const typingId = _appendChat("assistant", '<span class="spinner"></span>');
+
+  const context = APP.results ? {
+    validity:   APP.results.validity,
+    tolerances: (APP.results.tolerances || []).map(t => ({
+      niveau: t.niveau, xMean: t.xMean, recouvRel: t.recouvRel,
+      ltbRel: t.ltbRel, lthRel: t.lthRel, accept: t.accept,
+    })),
+    qualityScore: APP.results.qualityScore,
+    config: { lambda: APP.config.lambda, beta: APP.config.beta, methode: APP.config.methode },
+  } : {};
 
   try {
-    const context = APP.results ? {
-      validity:    APP.results.validity,
-      tolerances:  APP.results.tolerances.map(t => ({ niveau: t.niveau, xMean: t.xMean, recouvRel: t.recouvRel, ltbRel: t.ltbRel, lthRel: t.lthRel, accept: t.accept })),
-      config:      { lambda: APP.config.lambda, beta: APP.config.beta, methode: APP.config.methode },
-    } : {};
-
-    const response = await fetch(`${BACKEND_URL}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        message: msg,
-        context: context,
-        provider: 'gemini'
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    document.getElementById(typingId).innerHTML = data.response.replace(/\n/g, '<br>');
+    ApiClient.setProvider(document.getElementById("ai-provider").value);
+    const res  = await ApiClient.chat(msg, context, APP.chatHistory);
+    const text = res.response || "—";
+    APP.chatHistory.push({ role: "user", content: msg });
+    APP.chatHistory.push({ role: "assistant", content: text });
+    if (APP.chatHistory.length > 20) APP.chatHistory = APP.chatHistory.slice(-20);
+    document.getElementById(typingId).innerHTML = _formatAIText(text);
   } catch (e) {
-    document.getElementById(typingId).innerHTML = `❌ ${e.message}`;
+    document.getElementById(typingId).innerHTML = `<span style="color:var(--invalid)">❌ ${e.message}</span>`;
   }
 }
 
 let _chatN = 0;
-function appendChat(role, html) {
-  const id  = `chat-msg-${++_chatN}`;
+function _appendChat(role, html) {
+  const id  = `chat-${++_chatN}`;
   const box = document.getElementById("chat-messages");
   box.insertAdjacentHTML("beforeend", `
     <div class="chat-msg ${role}">
@@ -782,39 +770,84 @@ function appendChat(role, html) {
   return id;
 }
 
-// ─── RAPPORT ──────────────────────────────────────────────────────────────────
-function setupReportHandlers() {
-  document.getElementById("btn-report-html").addEventListener("click", () => {
-    if (!APP.results) { toast("Calculez d'abord le profil", "warn"); return; }
-
-    const opts = {
-      labo:     document.getElementById("rpt-labo").value,
-      analyste: document.getElementById("rpt-analyste").value,
-      ref:      document.getElementById("rpt-ref").value,
-      version:  document.getElementById("rpt-version").value,
-      params:      document.getElementById("rpt-params").checked,
-      etalonnage:  document.getElementById("rpt-etalonnage").checked,
-      criteria:    document.getElementById("rpt-criteria").checked,
-      tolerance:   document.getElementById("rpt-tolerance").checked,
-      profile:     document.getElementById("rpt-profile").checked,
-      outliers:    document.getElementById("rpt-outliers").checked,
-      ai:          document.getElementById("rpt-ai").checked,
-    };
-
-    const html = ReportGenerator.generateHTMLReport(
-      { results: APP.results, config: APP.config, aiContent: APP.aiContent },
-      opts
-    );
-    const fname = `Rapport_Validation_${(APP.config.methode || "methode").replace(/\s+/g, "_").slice(0, 30)}_${new Date().toISOString().slice(0,10)}.html`;
-    ReportGenerator.downloadHTMLReport(html, fname);
-    toast("✅ Rapport HTML téléchargé", "info");
-    logReport("Rapport HTML généré", "ok");
-  });
-
-
+function _showAIResult(html, sourceLabel = "RÉSULTAT") {
+  document.getElementById("ai-result-card").style.display = "block";
+  document.getElementById("ai-source-label").textContent  = sourceLabel;
+  document.getElementById("ai-content").innerHTML = html;
 }
 
-// ─── Utilitaires UI ───────────────────────────────────────────────────────────
+function _formatAIText(text) {
+  return String(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\n\n/g, "<br><br>")
+    .replace(/\n/g, "<br>")
+    .replace(/^(\d+)\.\s+/gm, "<br><b>$1.</b> ");
+}
+
+function _sevBg(sev)    { return { success:"valid-bg", info:"amber-bg", warning:"warning-bg", critical:"invalid-bg" }[sev] || "bg-elevated"; }
+function _sevColor(sev) { return { success:"valid", info:"amber", warning:"warning", critical:"invalid" }[sev] || "navy-400"; }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RAPPORT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _setupReportHandlers() {
+  const _getOpts = () => ({
+    labo:      document.getElementById("rpt-labo").value,
+    analyste:  document.getElementById("rpt-analyste").value,
+    ref:       document.getElementById("rpt-ref").value,
+    version:   document.getElementById("rpt-version").value,
+    params:    document.getElementById("rpt-params").checked,
+    etalonnage:document.getElementById("rpt-etalonnage").checked,
+    criteria:  document.getElementById("rpt-criteria").checked,
+    tolerance: document.getElementById("rpt-tolerance").checked,
+    outliers:  document.getElementById("rpt-outliers").checked,
+    normative: document.getElementById("rpt-normative").checked,
+    ai:        document.getElementById("rpt-ai").checked,
+  });
+
+  // HTML
+  document.getElementById("btn-report-html").addEventListener("click", () => {
+    if (!APP.results) { toast("Calculez d'abord le profil", "warn"); return; }
+    try {
+      const html  = ReportGenerator.generateHTMLReport(
+        { results: APP.results, config: APP.config, aiContent: APP.aiContent },
+        _getOpts()
+      );
+      const fname = `Rapport_${(APP.config.methode||"methode").replace(/\s+/g,"_").slice(0,30)}_${new Date().toISOString().slice(0,10)}.html`;
+      ReportGenerator.downloadHTMLReport(html, fname);
+      toast("✅ Rapport HTML téléchargé", "info");
+      logReport("Rapport HTML généré", "ok");
+    } catch (e) {
+      toast("Erreur : " + e.message, "err");
+      logReport("Erreur HTML : " + e.message, "err");
+    }
+  });
+
+  // PDF via backend
+  document.getElementById("btn-report-pdf").addEventListener("click", async () => {
+    if (!APP.results) { toast("Calculez d'abord le profil", "warn"); return; }
+    setBtnLoading("btn-report-pdf", true, "Génération PDF…");
+    try {
+      const opts  = _getOpts();
+      const cfg   = { ...APP.config, laboratoire: opts.labo, analyste: opts.analyste };
+      await ReportGenerator.downloadPDFReport(APP.results, cfg);
+      toast("✅ Rapport PDF téléchargé", "info");
+      logReport("Rapport PDF généré via backend", "ok");
+    } catch (e) {
+      toast("Erreur PDF : " + e.message, "err");
+      logReport("Erreur PDF : " + e.message, "err");
+    }
+    setBtnLoading("btn-report-pdf", false, "📄 Télécharger le rapport PDF (via backend)");
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITAIRES UI
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function toast(msg, type = "info", duration = 3200) {
   const el = document.createElement("div");
   el.className = `toast ${type}`;
